@@ -1,0 +1,16 @@
+node_modules/
+dist/
+target/
+src-tauri/target/
+vendor-tools/
+artifacts/
+_tool-downloads/
+.tool-cache/
+*.partial.mp4
+*.partial.jpg
+*.partial.txt
+*.aov-backup-*
+*.log
+.DS_Store
+.idea/
+.vscode/

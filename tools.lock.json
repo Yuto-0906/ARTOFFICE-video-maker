@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "ffmpeg": {
+    "version": "8.1.2",
+    "fileName": "ffmpeg-8.1.2-essentials_build.zip",
+    "url": "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.1.2-essentials_build.zip",
+    "sha256": "DB580001CAA24AC104C8CB856CD113A87B0A443F7BDF47D8C12B1D740584A2EC"
+  },
+  "imageMagick": {
+    "version": "7.1.2-30",
+    "fileName": "ImageMagick-7.1.2-30-portable-Q16-HDRI-x64.7z",
+    "url": "https://download.imagemagick.org/archive/binaries/ImageMagick-7.1.2-30-portable-Q16-HDRI-x64.7z",
+    "sha256": "D98471F5EC9D87E222C69C8C28C98FE6665DAB76CD3EF752C5E4DE785BE553BE"
+  },
+  "notoSansJp": {
+    "version": "2.004",
+    "sourceCommit": "6a003b5eb672dc8bf5bff5937cf5863f8b175445",
+    "fileName": "NotoSansJP-2.004-VF.ttf",
+    "url": "https://raw.githubusercontent.com/google/fonts/6a003b5eb672dc8bf5bff5937cf5863f8b175445/ofl/notosansjp/NotoSansJP%5Bwght%5D.ttf",
+    "sha256": "C2F3B4D463500A2DDCD3849CDED1FCEEB9FD6D1C32E6CBECD568453BA50FC68F",
+    "generatedBlackSha256": "ACCADF3552CF516A5DD89471E88F8A857D2AFCC0D999D29A3F0DAE1BFB9C9564",
+    "licenseFileName": "NotoSansJP-OFL.txt",
+    "licenseUrl": "https://raw.githubusercontent.com/google/fonts/6a003b5eb672dc8bf5bff5937cf5863f8b175445/ofl/notosansjp/OFL.txt",
+    "licenseSha256": "1C05C68C34F9708415AADA51F17E1B0092D2CEA709BF4A94CD38114F9E73D7D9"
+  },
+  "buildDependencies": {
+    "fontToolsVersion": "4.63.0"
+  }
+}
