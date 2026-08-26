@@ -9,7 +9,7 @@
   "imageMagick": {
     "version": "7.1.2-30",
     "fileName": "ImageMagick-7.1.2-30-portable-Q16-HDRI-x64.7z",
-    "url": "https://download.imagemagick.org/archive/binaries/ImageMagick-7.1.2-30-portable-Q16-HDRI-x64.7z",
+    "url": "https://github.com/ImageMagick/ImageMagick/releases/download/7.1.2-30/ImageMagick-7.1.2-30-portable-Q16-HDRI-x64.7z",
     "sha256": "D98471F5EC9D87E222C69C8C28C98FE6665DAB76CD3EF752C5E4DE785BE553BE"
   },
   "notoSansJp": {

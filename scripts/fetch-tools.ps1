@@ -43,23 +43,33 @@ function Get-VerifiedFile {
     }
 
     $partial = "$target.partial"
-    if (Test-Path -LiteralPath $partial) {
-        Remove-Item -LiteralPath $partial -Force
-    }
-    Write-Host "Downloading $Label."
-    try {
-        Invoke-WebRequest -Uri ([string]$Artifact.url) -OutFile $partial
-        $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $partial).Hash.ToUpperInvariant()
-        if ($actual -ne $expected) {
-            throw "$Label SHA-256 mismatch. Expected=$expected Actual=$actual"
-        }
-        Move-Item -LiteralPath $partial -Destination $target -Force
-    } finally {
+    $maximumAttempts = 4
+    for ($attempt = 1; $attempt -le $maximumAttempts; $attempt++) {
         if (Test-Path -LiteralPath $partial) {
             Remove-Item -LiteralPath $partial -Force
         }
+        Write-Host "Downloading $Label (attempt $attempt/$maximumAttempts)."
+        try {
+            Invoke-WebRequest -UseBasicParsing -Uri ([string]$Artifact.url) -OutFile $partial
+            $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $partial).Hash.ToUpperInvariant()
+            if ($actual -ne $expected) {
+                throw "$Label SHA-256 mismatch. Expected=$expected Actual=$actual"
+            }
+            Move-Item -LiteralPath $partial -Destination $target -Force
+            return $target
+        } catch {
+            if (Test-Path -LiteralPath $partial) {
+                Remove-Item -LiteralPath $partial -Force
+            }
+            if ($attempt -eq $maximumAttempts) {
+                throw
+            }
+            $delaySeconds = [int](5 * [Math]::Pow(2, $attempt - 1))
+            Write-Warning "Download failed for ${Label}: $($_.Exception.Message). Retrying in $delaySeconds seconds."
+            Start-Sleep -Seconds $delaySeconds
+        }
     }
-    return $target
+    throw "Downloading $Label failed unexpectedly."
 }
 
 function Get-SevenZip {

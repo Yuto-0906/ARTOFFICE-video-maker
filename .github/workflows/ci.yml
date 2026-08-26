@@ -30,6 +30,11 @@ jobs:
         with:
           workspaces: src-tauri
 
+      - uses: actions/cache@v4
+        with:
+          path: .tool-cache
+          key: runtime-tools-${{ runner.os }}-${{ hashFiles('tools.lock.json') }}
+
       - name: Install dependencies
         run: |
           npm ci
