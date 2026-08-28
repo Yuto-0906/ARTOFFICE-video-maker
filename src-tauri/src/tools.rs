@@ -14,11 +14,9 @@ fn candidate_roots() -> Vec<PathBuf> {
             roots.push(parent.join("resources"));
         }
     }
-    roots.push(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("vendor-tools"),
-    );
+    if let Some(project_root) = Path::new(env!("CARGO_MANIFEST_DIR")).parent() {
+        roots.push(project_root.join("vendor-tools"));
+    }
     roots
 }
 
@@ -67,6 +65,13 @@ pub fn magick() -> Option<PathBuf> {
     find_with_env("AOV_MAGICK_PATH", &["magick.exe", "magick"])
 }
 
+pub fn hide_console(command: &mut tokio::process::Command) {
+    #[cfg(windows)]
+    command.creation_flags(0x0800_0000);
+    #[cfg(not(windows))]
+    let _ = command;
+}
+
 pub fn font() -> Option<PathBuf> {
     if let Some(path) = find_with_env(
         "AOV_FONT_PATH",
@@ -89,5 +94,19 @@ pub fn status() -> ToolStatus {
         ffprobe_path: ffprobe().map(|path| path.to_string_lossy().into_owned()),
         magick_path: magick().map(|path| path.to_string_lossy().into_owned()),
         font_path: font().map(|path| path.to_string_lossy().into_owned()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Component;
+
+    use super::candidate_roots;
+
+    #[test]
+    fn bundled_tool_roots_do_not_contain_parent_components() {
+        assert!(candidate_roots()
+            .iter()
+            .all(|path| !path.components().any(|part| part == Component::ParentDir)));
     }
 }

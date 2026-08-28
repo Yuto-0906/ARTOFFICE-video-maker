@@ -13,9 +13,12 @@ use tokio::process::Command;
 use uuid::Uuid;
 
 use crate::{
-    models::{PreparedThumbnail, ThumbnailV1},
+    models::{CropRectNormalized, PreparedThumbnail, ThumbnailV1},
     tools,
 };
+
+const PREVIEW_MAX_DIMENSION: u32 = 1920;
+const PREVIEW_JPEG_QUALITY: u8 = 90;
 
 fn cache_directory() -> Result<PathBuf> {
     #[cfg(test)]
@@ -80,7 +83,9 @@ async fn decode_heic(path: &Path) -> Result<(DynamicImage, PathBuf)> {
         .context("HEICデコーダーが見つかりません。vendor-tools/imagemagickを準備してください。")?;
     let decoded = cache_directory()?.join(format!("decoded-{}.png", Uuid::new_v4()));
     let primary_image = format!("{}[0]", path.to_string_lossy());
-    let output = Command::new(magick)
+    let mut command = Command::new(magick);
+    tools::hide_console(&mut command);
+    let output = command
         .arg(primary_image)
         .arg("-auto-orient")
         .arg("-strip")
@@ -100,6 +105,25 @@ async fn decode_heic(path: &Path) -> Result<(DynamicImage, PathBuf)> {
     Ok((image, decoded))
 }
 
+fn save_preview(image: DynamicImage, preview_path: &Path) -> Result<()> {
+    let (source_width, source_height) = image.dimensions();
+    let preview = if source_width > PREVIEW_MAX_DIMENSION || source_height > PREVIEW_MAX_DIMENSION {
+        image.resize(
+            PREVIEW_MAX_DIMENSION,
+            PREVIEW_MAX_DIMENSION,
+            FilterType::Lanczos3,
+        )
+    } else {
+        image
+    };
+    let file =
+        File::create(preview_path).context("サムネイルのプレビューを作成できませんでした。")?;
+    let mut encoder = JpegEncoder::new_with_quality(BufWriter::new(file), PREVIEW_JPEG_QUALITY);
+    encoder
+        .encode_image(&preview.to_rgb8())
+        .context("サムネイルのプレビューを保存できませんでした。")
+}
+
 pub async fn prepare(source_path: &str) -> Result<PreparedThumbnail> {
     let source = Path::new(source_path);
     anyhow::ensure!(source.is_file(), "集合写真が見つかりません。");
@@ -111,18 +135,13 @@ pub async fn prepare(source_path: &str) -> Result<PreparedThumbnail> {
         (image, orientation, None)
     };
     let (source_width, source_height) = image.dimensions();
-    let preview = if source_width > 2400 || source_height > 2400 {
-        image.resize(2400, 2400, FilterType::Lanczos3)
-    } else {
-        image
-    };
-    let preview_path = cache_directory()?.join(format!("preview-{}.png", Uuid::new_v4()));
-    preview
-        .save_with_format(&preview_path, image::ImageFormat::Png)
-        .context("サムネイルのプレビューを保存できませんでした。")?;
+    let preview_path = cache_directory()?.join(format!("preview-{}.jpg", Uuid::new_v4()));
+    let task_path = preview_path.clone();
+    let preview_result = tokio::task::spawn_blocking(move || save_preview(image, &task_path)).await;
     if let Some(temporary) = decoded_temp {
         let _ = fs::remove_file(temporary);
     }
+    preview_result.context("サムネイルのプレビュー処理が異常終了しました。")??;
     Ok(PreparedThumbnail {
         source_path: source_path.to_string(),
         preview_path: preview_path.to_string_lossy().into_owned(),
@@ -132,17 +151,8 @@ pub async fn prepare(source_path: &str) -> Result<PreparedThumbnail> {
     })
 }
 
-pub async fn export(thumbnail: &ThumbnailV1, destination: &Path) -> Result<()> {
-    let source = Path::new(&thumbnail.source_path);
-    anyhow::ensure!(source.is_file(), "サムネイルの元画像が見つかりません。");
-    let (image, decoded_temp) = if is_heic(source) {
-        let (image, temporary) = decode_heic(source).await?;
-        (image, Some(temporary))
-    } else {
-        (decode_standard(source)?.0, None)
-    };
+fn export_decoded(image: DynamicImage, crop: CropRectNormalized, destination: &Path) -> Result<()> {
     let (image_width, image_height) = image.dimensions();
-    let crop = thumbnail.crop;
     anyhow::ensure!(
         crop.x.is_finite()
             && crop.y.is_finite()
@@ -188,9 +198,26 @@ pub async fn export(thumbnail: &ThumbnailV1, destination: &Path) -> Result<()> {
     encoder
         .encode_image(&resized)
         .context("サムネイルJPEGを保存できませんでした。")?;
+    Ok(())
+}
+
+pub async fn export(thumbnail: &ThumbnailV1, destination: &Path) -> Result<()> {
+    let source = Path::new(&thumbnail.source_path);
+    anyhow::ensure!(source.is_file(), "サムネイルの元画像が見つかりません。");
+    let (image, decoded_temp) = if is_heic(source) {
+        let (image, temporary) = decode_heic(source).await?;
+        (image, Some(temporary))
+    } else {
+        (decode_standard(source)?.0, None)
+    };
+    let crop = thumbnail.crop;
+    let destination = destination.to_path_buf();
+    let export_result =
+        tokio::task::spawn_blocking(move || export_decoded(image, crop, &destination)).await;
     if let Some(temporary) = decoded_temp {
         let _ = fs::remove_file(temporary);
     }
+    export_result.context("サムネイルの書き出し処理が異常終了しました。")??;
     Ok(())
 }
 
@@ -227,6 +254,36 @@ mod tests {
                 y: 0.125,
                 width: 1.0,
                 height: 0.75,
+            },
+            zoom: 1.0,
+        };
+        export(&model, &destination).await.unwrap();
+        let output = image::open(destination).unwrap();
+        assert_eq!(output.dimensions(), (1920, 1080));
+    }
+
+    #[tokio::test]
+    #[ignore = "set AOV_TEST_THUMBNAIL_PATH to run the supplied-image regression test"]
+    async fn supplied_jpeg_regression_test() {
+        let source = std::env::var("AOV_TEST_THUMBNAIL_PATH")
+            .expect("AOV_TEST_THUMBNAIL_PATH must point to the supplied image");
+        let prepared = prepare(&source).await.unwrap();
+        assert!(prepared.source_width > 0);
+        assert!(prepared.source_height > 0);
+
+        let temp = tempfile::tempdir().unwrap();
+        let destination = temp.path().join("supplied-thumbnail.jpg");
+        let model = ThumbnailV1 {
+            source_path: prepared.source_path,
+            preview_path: prepared.preview_path,
+            source_width: prepared.source_width,
+            source_height: prepared.source_height,
+            exif_orientation: prepared.exif_orientation,
+            crop: CropRectNormalized {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
             },
             zoom: 1.0,
         };

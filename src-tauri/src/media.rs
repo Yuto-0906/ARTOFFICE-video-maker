@@ -68,7 +68,9 @@ fn fingerprint(path: &Path) -> SourceFingerprint {
 async fn probe_one(path: &Path) -> Result<MediaInfo> {
     anyhow::ensure!(path.is_file(), "元動画が見つかりません。");
     let ffprobe = tools::ffprobe().context("FFprobeが見つかりません。")?;
-    let output = Command::new(ffprobe)
+    let mut command = Command::new(ffprobe);
+    tools::hide_console(&mut command);
+    let output = command
         .arg("-v")
         .arg("error")
         .arg("-show_format")

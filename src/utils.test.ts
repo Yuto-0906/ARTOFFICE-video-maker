@@ -3,6 +3,7 @@ import type { ClipV1 } from "./types";
 import {
   chapterRows,
   chapterWarnings,
+  centeredCropForAspect,
   duplicateOrders,
   frameToSeconds,
   formatChapterTime,
@@ -12,6 +13,25 @@ import {
   secondsToFrame,
   sortClipsByOrder,
 } from "./utils";
+
+describe("thumbnail crop", () => {
+  it("2731×1536の画像を中央の16:9へ正規化する", () => {
+    const crop = centeredCropForAspect(2731, 1536);
+    expect(crop.height).toBe(1);
+    expect(crop.width).toBeCloseTo((16 / 9) / (2731 / 1536), 10);
+    expect(crop.x).toBeCloseTo((1 - crop.width) / 2, 10);
+    expect(crop.y).toBe(0);
+  });
+
+  it("縦長画像では上下を中央で切り抜く", () => {
+    expect(centeredCropForAspect(3000, 4000)).toEqual({
+      x: 0,
+      y: 0.2890625,
+      width: 1,
+      height: 0.421875,
+    });
+  });
+});
 
 const clip = (name: string, seconds: number): ClipV1 => ({
   id: name,

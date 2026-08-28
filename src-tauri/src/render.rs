@@ -27,6 +27,7 @@ use crate::{
 };
 
 const TRANSITION_SECONDS: f64 = 0.5;
+const FILTER_FONT_FILE: &str = "NotoSansJP-Black.ttf";
 const OUTPUT_FPS: &str = "60000/1001";
 
 #[derive(Clone, Default)]
@@ -258,13 +259,6 @@ fn working_directory(job_id: &str) -> Result<PathBuf> {
     Ok(directory)
 }
 
-fn escape_filter_path(path: &Path) -> String {
-    path.to_string_lossy()
-        .replace('\\', "/")
-        .replace(':', "\\:")
-        .replace('\'', "\\'")
-}
-
 fn measured_font_size(font_path: &Path, text: &str, base: f32, max_width: f32) -> f32 {
     let Ok(bytes) = fs::read(font_path) else {
         return base;
@@ -294,7 +288,9 @@ fn build_filter_graph(
     working: &Path,
 ) -> Result<PathBuf> {
     let (width, height) = dimensions;
-    let escaped_font = escape_filter_path(font_path);
+    let working_font = working.join(FILTER_FONT_FILE);
+    fs::copy(font_path, &working_font).context("書き出し用フォントを準備できませんでした。")?;
+    let escaped_font = FILTER_FONT_FILE;
     let base_font_size = if dimensions == resolution.dimensions() {
         resolution.font_size()
     } else {
@@ -305,7 +301,7 @@ fn build_filter_graph(
         let title_path = working.join(format!("title-{index}.txt"));
         fs::write(&title_path, clip.band_name.as_bytes())
             .context("バンド名の一時ファイルを作成できませんでした。")?;
-        let escaped_title = escape_filter_path(&title_path);
+        let escaped_title = format!("title-{index}.txt");
         let font_size = measured_font_size(
             font_path,
             &clip.band_name,
@@ -417,6 +413,7 @@ fn encoder_args(
 
 async fn encoder_available(ffmpeg: &Path, config: &EncoderConfig) -> bool {
     let mut command = Command::new(ffmpeg);
+    tools::hide_console(&mut command);
     command
         .arg("-hide_banner")
         .arg("-loglevel")
@@ -522,6 +519,10 @@ async fn execute_ffmpeg(execution: FfmpegExecution<'_>) -> Result<bool> {
     let total = total_duration(&request.clips);
     let started = Instant::now();
     let mut command = Command::new(ffmpeg);
+    tools::hide_console(&mut command);
+    if let Some(working) = graph.parent() {
+        command.current_dir(working);
+    }
     command
         .arg("-hide_banner")
         .arg("-loglevel")
@@ -916,6 +917,8 @@ pub async fn transition_preview(request: TransitionPreviewRequest) -> Result<Str
     fs::create_dir_all(&directory)?;
     let output_path = directory.join(format!("transition-{id}.mp4"));
     let mut command = Command::new(&ffmpeg);
+    tools::hide_console(&mut command);
+    command.current_dir(&working);
     command
         .arg("-hide_banner")
         .arg("-loglevel")
@@ -982,7 +985,7 @@ mod tests {
 
     use super::{
         build_filter_graph, chapter_text, choose_encoder, encoder_args, safe_stem, total_duration,
-        OUTPUT_FPS,
+        FILTER_FONT_FILE, OUTPUT_FPS,
     };
     use crate::models::{ClipV1, MediaInfo, ProjectV1, Rational, Resolution, SourceFingerprint};
     use crate::{media, project, tools};
@@ -1041,6 +1044,42 @@ mod tests {
         assert_eq!(safe_stem("CON"), "_CON");
     }
 
+    #[test]
+    fn filter_graph_uses_ascii_relative_title_assets() {
+        let Some(source_font) = tools::font() else {
+            return;
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let non_ascii_directory = temp.path().join("日本語のフォルダー");
+        fs::create_dir_all(&non_ascii_directory).unwrap();
+        let non_ascii_font = non_ascii_directory.join(FILTER_FONT_FILE);
+        fs::copy(&source_font, &non_ascii_font).unwrap();
+        let working = temp.path().join("working");
+        fs::create_dir_all(&working).unwrap();
+
+        let graph = build_filter_graph(
+            &[clip("サカナクション 1", 3.0)],
+            Resolution::P1080,
+            (640, 360),
+            &non_ascii_font,
+            &working,
+        )
+        .unwrap();
+        let contents = fs::read_to_string(graph).unwrap();
+
+        assert!(contents.contains("fontfile='NotoSansJP-Black.ttf'"));
+        assert!(contents.contains("textfile='title-0.txt'"));
+        assert!(!contents.contains("日本語のフォルダー"));
+        assert_eq!(
+            fs::read(working.join(FILTER_FONT_FILE)).unwrap(),
+            fs::read(non_ascii_font).unwrap()
+        );
+        assert_eq!(
+            fs::read_to_string(working.join("title-0.txt")).unwrap(),
+            "サカナクション 1"
+        );
+    }
+
     #[tokio::test]
     async fn ffmpeg_filter_graph_smoke_test() {
         let Some(ffmpeg) = tools::ffmpeg() else {
@@ -1087,6 +1126,7 @@ mod tests {
             .unwrap();
         let output = temp.path().join("smoke.mp4");
         let mut command = StdCommand::new(&ffmpeg);
+        command.current_dir(temp.path());
         command.args(["-hide_banner", "-loglevel", "error", "-y"]);
         for clip in &clips {
             command.arg("-i").arg(&clip.source_path);
@@ -1175,6 +1215,7 @@ mod tests {
                     .unwrap();
             let output = temp.path().join(format!("{stem}.mp4"));
             let mut command = StdCommand::new(&ffmpeg);
+            command.current_dir(&working);
             command.args(["-hide_banner", "-loglevel", "error", "-y"]);
             for clip in &clips {
                 command.arg("-i").arg(&clip.source_path);
@@ -1348,6 +1389,7 @@ mod tests {
         fs::write(&chapters_path, chapter_text(&clips).as_bytes()).unwrap();
 
         let mut command = StdCommand::new(&ffmpeg);
+        command.current_dir(&working);
         command.args(["-hide_banner", "-loglevel", "warning", "-y"]);
         for clip in &clips {
             command.arg("-i").arg(&clip.source_path);

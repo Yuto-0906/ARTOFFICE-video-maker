@@ -3,7 +3,7 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import Cropper, { type Area } from "react-easy-crop";
+import Cropper, { type Area, type Point } from "react-easy-crop";
 import type {
   ClipV1,
   OutputPaths,
@@ -22,6 +22,7 @@ import {
   basename,
   chapterRows,
   chapterWarnings,
+  centeredCropForAspect,
   clipDurationSeconds,
   duplicateOrders,
   estimateOutputBytes,
@@ -83,6 +84,7 @@ export default function App() {
   const [renderProgress, setRenderProgress] = useState<RenderProgress | null>(null);
   const [renderResult, setRenderResult] = useState<RenderFinished | null>(null);
   const [closeRequested, setCloseRequested] = useState(false);
+  const [closing, setClosing] = useState(false);
 
   const selectedClip = project.clips.find((clip) => clip.id === selectedClipId) ?? project.clips[0] ?? null;
   const duplicateSet = useMemo(() => duplicateOrders(project.clips), [project.clips]);
@@ -378,7 +380,7 @@ export default function App() {
       const prepared = await invoke<PreparedThumbnail>("prepare_thumbnail", { sourcePath: selection });
       const thumbnail: ThumbnailV1 = {
         ...prepared,
-        crop: { x: 0, y: 0, width: 1, height: 1 },
+        crop: centeredCropForAspect(prepared.sourceWidth, prepared.sourceHeight),
         zoom: 1,
       };
       updateProject((current) => ({ ...current, thumbnail }));
@@ -398,9 +400,17 @@ export default function App() {
       width: area.width / 100,
       height: area.height / 100,
     };
-    updateProject((current) =>
-      current.thumbnail ? { ...current, thumbnail: { ...current.thumbnail, crop, zoom } } : current,
-    );
+    updateProject((current) => {
+      if (!current.thumbnail) return current;
+      const previous = current.thumbnail;
+      const unchanged =
+        Math.abs(previous.crop.x - crop.x) < 1e-6 &&
+        Math.abs(previous.crop.y - crop.y) < 1e-6 &&
+        Math.abs(previous.crop.width - crop.width) < 1e-6 &&
+        Math.abs(previous.crop.height - crop.height) < 1e-6 &&
+        Math.abs(previous.zoom - zoom) < 1e-6;
+      return unchanged ? current : { ...current, thumbnail: { ...previous, crop, zoom } };
+    });
   }
 
   async function chooseOutputDirectory() {
@@ -470,13 +480,33 @@ export default function App() {
   }
 
   async function closeDiscardingChanges() {
-    if (renderJobId) await cancelRender();
-    await getCurrentWindow().destroy();
+    if (closing) return;
+    setClosing(true);
+    try {
+      if (renderJobId) await cancelRender();
+      await getCurrentWindow().destroy();
+    } catch (reason) {
+      setClosing(false);
+      setCloseRequested(false);
+      setError(`アプリを終了できませんでした。\n${errorMessage(reason)}`);
+    }
   }
 
   async function saveAndClose() {
-    const saved = await saveProject(false);
-    if (saved) await getCurrentWindow().destroy();
+    if (closing) return;
+    setClosing(true);
+    try {
+      const saved = await saveProject(false);
+      if (!saved) {
+        setClosing(false);
+        return;
+      }
+      await getCurrentWindow().destroy();
+    } catch (reason) {
+      setClosing(false);
+      setCloseRequested(false);
+      setError(`アプリを終了できませんでした。\n${errorMessage(reason)}`);
+    }
   }
 
   return (
@@ -588,9 +618,9 @@ export default function App() {
             <h2 id="close-title">アプリを終了しますか？</h2>
             <p>{renderJobId ? "書き出しをキャンセルして終了します。" : "保存していない変更があります。"}</p>
             <div className="modal-actions">
-              {!renderJobId && <button className="primary" onClick={saveAndClose}>保存して終了</button>}
-              <button className="danger" onClick={closeDiscardingChanges}>{renderJobId ? "中止して終了" : "破棄して終了"}</button>
-              <button className="ghost" onClick={() => setCloseRequested(false)}>キャンセル</button>
+              {!renderJobId && <button className="primary" onClick={saveAndClose} disabled={closing}>{closing ? "終了処理中…" : "保存して終了"}</button>}
+              <button className="danger" onClick={closeDiscardingChanges} disabled={closing}>{closing ? "終了処理中…" : renderJobId ? "中止して終了" : "破棄して終了"}</button>
+              <button className="ghost" onClick={() => setCloseRequested(false)} disabled={closing}>キャンセル</button>
             </div>
           </div>
         </div>
@@ -874,11 +904,37 @@ interface ThumbnailStepProps {
 function ThumbnailStep({ thumbnail, busy, onChoose, onRemove, onCropComplete, onNext }: ThumbnailStepProps) {
   const [crop, setCrop] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(thumbnail?.zoom ?? 1);
+  const initialCroppedArea = useMemo<Area | undefined>(() => thumbnail ? {
+    x: thumbnail.crop.x * 100,
+    y: thumbnail.crop.y * 100,
+    width: thumbnail.crop.width * 100,
+    height: thumbnail.crop.height * 100,
+  } : undefined, [thumbnail?.sourcePath]);
+  const croppedAreaRef = useRef<Area | null>(initialCroppedArea ?? null);
 
   useEffect(() => {
     setCrop({ x: 0, y: 0 });
     setZoom(thumbnail?.zoom ?? 1);
-  }, [thumbnail?.sourcePath]);
+    croppedAreaRef.current = initialCroppedArea ?? null;
+  }, [thumbnail?.sourcePath, initialCroppedArea]);
+
+  const handleCropChange = useCallback((next: Point) => {
+    setCrop((current) =>
+      Math.abs(current.x - next.x) < 1e-6 && Math.abs(current.y - next.y) < 1e-6 ? current : next,
+    );
+  }, []);
+
+  const handleZoomChange = useCallback((next: number) => {
+    setZoom((current) => Math.abs(current - next) < 1e-6 ? current : next);
+  }, []);
+
+  const rememberCrop = useCallback((area: Area) => {
+    croppedAreaRef.current = area;
+  }, []);
+
+  const commitCrop = useCallback(() => {
+    if (croppedAreaRef.current) onCropComplete(croppedAreaRef.current, zoom);
+  }, [onCropComplete, zoom]);
 
   return (
     <section className="step-panel">
@@ -890,7 +946,7 @@ function ThumbnailStep({ thumbnail, busy, onChoose, onRemove, onCropComplete, on
       {!thumbnail ? (
         <div className="empty-state thumbnail-empty">
           <div className="empty-icon photo">▧</div><h2>集合写真は任意です</h2><p>JPG，PNG，HEIC，HEIFに対応します。選択しない場合，サムネイルは出力しません。</p>
-          <button className="secondary" onClick={onChoose}>写真を選択</button>
+          <button className="secondary" onClick={onChoose} disabled={busy}>{busy ? "画像を処理中…" : "写真を選択"}</button>
         </div>
       ) : (
         <div className="thumbnail-editor">
@@ -901,21 +957,18 @@ function ThumbnailStep({ thumbnail, busy, onChoose, onRemove, onCropComplete, on
               zoom={zoom}
               aspect={16 / 9}
               showGrid
-              initialCroppedAreaPercentages={{
-                x: thumbnail.crop.x * 100,
-                y: thumbnail.crop.y * 100,
-                width: thumbnail.crop.width * 100,
-                height: thumbnail.crop.height * 100,
-              }}
-              onCropChange={setCrop}
-              onZoomChange={setZoom}
-              onCropComplete={(area) => onCropComplete(area, zoom)}
+              initialCroppedAreaPercentages={initialCroppedArea}
+              onCropChange={handleCropChange}
+              onZoomChange={handleZoomChange}
+              onCropComplete={rememberCrop}
+              onCropAreaChange={rememberCrop}
+              onInteractionEnd={commitCrop}
             />
           </div>
           <aside className="crop-settings">
             <h2>切り抜き設定</h2>
             <div className="source-card"><span>元画像</span><strong title={thumbnail.sourcePath}>{basename(thumbnail.sourcePath)}</strong><small>{thumbnail.sourceWidth}×{thumbnail.sourceHeight}</small></div>
-            <label className="field"><span>拡大率</span><input type="range" min={1} max={4} step={0.01} value={zoom} onChange={(event) => setZoom(Number(event.target.value))} /><small>{zoom.toFixed(2)}倍</small></label>
+            <label className="field"><span>拡大率</span><input type="range" min={1} max={4} step={0.01} value={zoom} onChange={(event) => handleZoomChange(Number(event.target.value))} onPointerUp={commitCrop} onKeyUp={commitCrop} onBlur={commitCrop} /><small>{zoom.toFixed(2)}倍</small></label>
             <p className="hint">写真をドラッグして全員が枠内に入るよう調整します。出力時に高品質補間を行います。</p>
             <button className="danger text" onClick={onRemove}>集合写真を削除</button>
           </aside>

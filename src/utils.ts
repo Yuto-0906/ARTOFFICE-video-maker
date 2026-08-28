@@ -3,6 +3,19 @@ import type { ClipV1, ParsedFileName, ProjectV1, Rational } from "./types";
 export const OUTPUT_FPS: Rational = { numerator: 60000, denominator: 1001 };
 export const TRANSITION_SECONDS = 0.5;
 
+export function centeredCropForAspect(width: number, height: number, aspect = 16 / 9) {
+  if (width <= 0 || height <= 0 || !Number.isFinite(aspect) || aspect <= 0) {
+    return { x: 0, y: 0, width: 1, height: 1 };
+  }
+  const sourceAspect = width / height;
+  if (sourceAspect > aspect) {
+    const cropWidth = aspect / sourceAspect;
+    return { x: (1 - cropWidth) / 2, y: 0, width: cropWidth, height: 1 };
+  }
+  const cropHeight = sourceAspect / aspect;
+  return { x: 0, y: (1 - cropHeight) / 2, width: 1, height: cropHeight };
+}
+
 export function parseVideoFileName(fileName: string): ParsedFileName | null {
   const stem = fileName.replace(/\.[^.]+$/, "");
   const separator = stem.indexOf("_");
