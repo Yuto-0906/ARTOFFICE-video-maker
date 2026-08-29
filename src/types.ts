@@ -36,6 +36,8 @@ export interface ClipV1 {
   inFrame: number;
   outFrameExclusive: number;
   media: MediaInfo;
+  /** 前の動画と同じバンドの続きとして，クロスフェードなしで直結する。 */
+  joinWithPrevious?: boolean;
   importError?: string;
 }
 
@@ -58,7 +60,7 @@ export interface ThumbnailV1 {
 
 export interface ProjectV1 {
   schemaVersion: 1;
-  appVersion: "0.1.0";
+  appVersion: "0.1.0" | "0.2.0";
   eventName: string;
   clips: ClipV1[];
   outputResolution: Resolution;

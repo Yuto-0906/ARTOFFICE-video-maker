@@ -32,10 +32,45 @@ export function sortClipsByOrder<T extends Pick<ClipV1, "order" | "bandName">>(c
   return [...clips].sort((a, b) => a.order - b.order || a.bandName.localeCompare(b.bandName, "ja"));
 }
 
-export function duplicateOrders(clips: Array<Pick<ClipV1, "order">>): Set<number> {
+export function duplicateOrders(clips: Array<Pick<ClipV1, "order"> & Partial<Pick<ClipV1, "joinWithPrevious">>>): Set<number> {
   const counts = new Map<number, number>();
-  clips.forEach((clip) => counts.set(clip.order, (counts.get(clip.order) ?? 0) + 1));
+  clips.forEach((clip, index) => {
+    if (index > 0 && clip.joinWithPrevious) return;
+    counts.set(clip.order, (counts.get(clip.order) ?? 0) + 1);
+  });
   return new Set([...counts.entries()].filter(([, count]) => count > 1).map(([order]) => order));
+}
+
+export function clipGroups(clips: ClipV1[]): ClipV1[][] {
+  const groups: ClipV1[][] = [];
+  clips.forEach((clip, index) => {
+    if (index === 0 || !clip.joinWithPrevious) groups.push([clip]);
+    else groups[groups.length - 1].push(clip);
+  });
+  return groups;
+}
+
+export function bandCount(clips: ClipV1[]): number {
+  return clipGroups(clips).length;
+}
+
+export function renumberClipOrders(clips: ClipV1[]): ClipV1[] {
+  let order = 0;
+  return clips.map((clip, index) => {
+    const joinWithPrevious = index > 0 && Boolean(clip.joinWithPrevious);
+    if (!joinWithPrevious) order += 1;
+    return { ...clip, order, joinWithPrevious };
+  });
+}
+
+export function moveClipGroup(clips: ClipV1[], sourceId: string, targetId: string): ClipV1[] {
+  const groups = clipGroups(clips);
+  const sourceIndex = groups.findIndex((group) => group.some((clip) => clip.id === sourceId));
+  const targetIndex = groups.findIndex((group) => group.some((clip) => clip.id === targetId));
+  if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return clips;
+  const [moving] = groups.splice(sourceIndex, 1);
+  groups.splice(targetIndex, 0, moving);
+  return renumberClipOrders(groups.flat());
 }
 
 export function fpsValue(fps: Rational): number {
@@ -59,17 +94,21 @@ export function clipDurationSeconds(clip: ClipV1): number {
 export function projectDurationSeconds(clips: ClipV1[]): number {
   if (clips.length === 0) return 0;
   const total = clips.reduce((sum, clip) => sum + clipDurationSeconds(clip), 0);
-  return Math.max(0, total - TRANSITION_SECONDS * (clips.length - 1));
+  const transitions = clips.slice(1).filter((clip) => !clip.joinWithPrevious).length;
+  return Math.max(0, total - TRANSITION_SECONDS * transitions);
 }
 
 export function chapterRows(clips: ClipV1[]): Array<{ seconds: number; text: string }> {
   let cursor = 0;
-  return clips.map((clip, index) => {
-    const row = { seconds: Math.max(0, Math.floor(cursor)), text: clip.bandName };
+  const rows: Array<{ seconds: number; text: string }> = [];
+  clips.forEach((clip, index) => {
+    if (index === 0 || !clip.joinWithPrevious) {
+      rows.push({ seconds: Math.max(0, Math.floor(cursor)), text: clip.bandName });
+    }
     cursor += clipDurationSeconds(clip);
-    if (index < clips.length - 1) cursor -= TRANSITION_SECONDS;
-    return row;
+    if (index < clips.length - 1 && !clips[index + 1].joinWithPrevious) cursor -= TRANSITION_SECONDS;
   });
+  return rows;
 }
 
 export function formatChapterTime(totalSeconds: number): string {
@@ -117,10 +156,12 @@ export function formatBytes(bytes: number): string {
 
 export function chapterWarnings(clips: ClipV1[]): string[] {
   const warnings: string[] = [];
-  if (clips.length > 0 && clips.length < 3) warnings.push("YouTubeのチャプター表示には3件以上の時刻が必要です。");
-  clips.forEach((clip) => {
-    if (clipDurationSeconds(clip) < 10) {
-      warnings.push(`${clip.bandName}は10秒未満のため，YouTubeでチャプターとして認識されない可能性があります。`);
+  const groups = clipGroups(clips);
+  if (groups.length > 0 && groups.length < 3) warnings.push("YouTubeのチャプター表示には3件以上の時刻が必要です。");
+  groups.forEach((group) => {
+    const duration = group.reduce((sum, clip) => sum + clipDurationSeconds(clip), 0);
+    if (duration < 10) {
+      warnings.push(`${group[0].bandName}は10秒未満のため，YouTubeでチャプターとして認識されない可能性があります。`);
     }
   });
   return warnings;
@@ -131,7 +172,7 @@ export function validateProject(value: unknown): value is ProjectV1 {
   const project = value as Partial<ProjectV1>;
   return (
     project.schemaVersion === 1 &&
-    project.appVersion === "0.1.0" &&
+    (project.appVersion === "0.1.0" || project.appVersion === "0.2.0") &&
     typeof project.eventName === "string" &&
     Array.isArray(project.clips) &&
     (project.outputResolution === "1080p" || project.outputResolution === "1440p") &&

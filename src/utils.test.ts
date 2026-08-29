@@ -1,17 +1,22 @@
 import { describe, expect, it } from "vitest";
 import type { ClipV1 } from "./types";
 import {
+  bandCount,
   chapterRows,
   chapterWarnings,
   centeredCropForAspect,
+  clipGroups,
   duplicateOrders,
   frameToSeconds,
   formatChapterTime,
+  moveClipGroup,
   parseClock,
   parseVideoFileName,
   projectDurationSeconds,
+  renumberClipOrders,
   secondsToFrame,
   sortClipsByOrder,
+  validateProject,
 } from "./utils";
 
 describe("thumbnail crop", () => {
@@ -58,6 +63,7 @@ const clip = (name: string, seconds: number): ClipV1 => ({
     needsConversion: false,
     conversionReasons: [],
   },
+  joinWithPrevious: false,
 });
 
 describe("parseVideoFileName", () => {
@@ -84,6 +90,14 @@ describe("parseVideoFileName", () => {
   it("重複する出演順をすべて検出する", () => {
     expect([...duplicateOrders([{ order: 1 }, { order: 2 }, { order: 2 }, { order: 10 }, { order: 10 }])]).toEqual([2, 10]);
   });
+
+  it("連結パートの出演順は重複として扱わない", () => {
+    expect([...duplicateOrders([
+      { order: 1 },
+      { order: 1, joinWithPrevious: true },
+      { order: 2 },
+    ])]).toEqual([]);
+  });
 });
 
 describe("chapter calculation", () => {
@@ -108,6 +122,41 @@ describe("chapter calculation", () => {
       "Aは10秒未満のため，YouTubeでチャプターとして認識されない可能性があります。",
     ]);
   });
+
+  it("分割動画は1バンドとして直結し，次のバンドだけクロスフェードする", () => {
+    const first = clip("分割バンド", 10);
+    const continuation = { ...clip("分割バンド", 8), id: "分割バンド-part2", joinWithPrevious: true };
+    const next = clip("次のバンド", 20);
+    const clips = [first, continuation, next];
+
+    expect(bandCount(clips)).toBe(2);
+    expect(clipGroups(clips).map((group) => group.length)).toEqual([2, 1]);
+    expect(chapterRows(clips)).toEqual([
+      { seconds: 0, text: "分割バンド" },
+      { seconds: 17, text: "次のバンド" },
+    ]);
+    expect(projectDurationSeconds(clips)).toBeCloseTo(37.5, 1);
+    expect(chapterWarnings(clips)).toEqual(["YouTubeのチャプター表示には3件以上の時刻が必要です。"]);
+  });
+});
+
+describe("group ordering", () => {
+  it("連結パートを分離せずバンド単位で並べ替える", () => {
+    const first = clip("A", 10);
+    const continuation = { ...clip("A", 8), id: "A-part2", joinWithPrevious: true };
+    const second = { ...clip("B", 10), id: "B" };
+    const third = { ...clip("C", 10), id: "C" };
+    const moved = moveClipGroup([first, continuation, second, third], first.id, third.id);
+
+    expect(moved.map((value) => value.id)).toEqual(["B", "C", "A", "A-part2"]);
+    expect(moved.map((value) => value.order)).toEqual([1, 2, 3, 3]);
+    expect(moved.map((value) => Boolean(value.joinWithPrevious))).toEqual([false, false, false, true]);
+  });
+
+  it("先頭の連結指定を正規化する", () => {
+    const value = { ...clip("A", 10), joinWithPrevious: true };
+    expect(renumberClipOrders([value])[0].joinWithPrevious).toBe(false);
+  });
 });
 
 describe("time entry", () => {
@@ -120,5 +169,20 @@ describe("time entry", () => {
     const fps = { numerator: 60000, denominator: 1001 };
     expect(frameToSeconds(600, fps)).toBeCloseTo(10.01, 6);
     expect(secondsToFrame(10.01, fps)).toBe(600);
+  });
+});
+
+describe("project compatibility", () => {
+  it("v0.1.0の保存データとv0.2.0の保存データを読み込める", () => {
+    const base = {
+      schemaVersion: 1,
+      eventName: "8月ライブ",
+      clips: [],
+      outputResolution: "1080p",
+      transitionMs: 500,
+      thumbnail: null,
+    };
+    expect(validateProject({ ...base, appVersion: "0.1.0" })).toBe(true);
+    expect(validateProject({ ...base, appVersion: "0.2.0" })).toBe(true);
   });
 });

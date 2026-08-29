@@ -181,7 +181,12 @@ pub fn output_paths_for(request: &RenderRequest) -> Result<OutputPaths> {
 
 fn total_duration(clips: &[ClipV1]) -> f64 {
     let source: f64 = clips.iter().map(ClipV1::duration_seconds).sum();
-    (source - TRANSITION_SECONDS * clips.len().saturating_sub(1) as f64).max(0.0)
+    let transitions = clips
+        .iter()
+        .skip(1)
+        .filter(|clip| !clip.join_with_previous)
+        .count();
+    (source - TRANSITION_SECONDS * transitions as f64).max(0.0)
 }
 
 fn validate_request(request: &RenderRequest) -> Result<OutputPaths> {
@@ -192,6 +197,10 @@ fn validate_request(request: &RenderRequest) -> Result<OutputPaths> {
     anyhow::ensure!(
         !request.clips.is_empty(),
         "動画を1本以上読み込んでください。"
+    );
+    anyhow::ensure!(
+        !request.clips[0].join_with_previous,
+        "先頭の動画を前の動画へ連結することはできません。"
     );
     anyhow::ensure!(tools::ffmpeg().is_some(), "FFmpegが見つかりません。");
     anyhow::ensure!(
@@ -287,6 +296,17 @@ fn build_filter_graph(
     font_path: &Path,
     working: &Path,
 ) -> Result<PathBuf> {
+    build_filter_graph_internal(clips, resolution, dimensions, font_path, working, true)
+}
+
+fn build_filter_graph_internal(
+    clips: &[ClipV1],
+    resolution: Resolution,
+    dimensions: (u32, u32),
+    font_path: &Path,
+    working: &Path,
+    show_first_title: bool,
+) -> Result<PathBuf> {
     let (width, height) = dimensions;
     let working_font = working.join(FILTER_FONT_FILE);
     fs::copy(font_path, &working_font).context("書き出し用フォントを準備できませんでした。")?;
@@ -298,21 +318,28 @@ fn build_filter_graph(
     };
     let mut graph = String::new();
     for (index, clip) in clips.iter().enumerate() {
-        let title_path = working.join(format!("title-{index}.txt"));
-        fs::write(&title_path, clip.band_name.as_bytes())
-            .context("バンド名の一時ファイルを作成できませんでした。")?;
-        let escaped_title = format!("title-{index}.txt");
-        let font_size = measured_font_size(
-            font_path,
-            &clip.band_name,
-            base_font_size,
-            width as f32 * 0.85,
-        );
         graph.push_str(&format!(
-            "[{index}:v]trim=start={:.9}:end={:.9},setpts=PTS-STARTPTS,yadif=deint=interlaced,fps={OUTPUT_FPS},scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,format=yuv420p,settb=AVTB,drawtext=fontfile='{escaped_font}':textfile='{escaped_title}':fontcolor=white:fontsize={font_size:.2}:x=w*0.05:y=h-text_h-h*0.05:alpha='if(lt(t,0.5),t/0.5,if(lt(t,4.5),1,if(lt(t,5),(5-t)/0.5,0)))':enable='between(t,0,5)'[v{index}];\n",
+            "[{index}:v]trim=start={:.9}:end={:.9},setpts=PTS-STARTPTS,yadif=deint=interlaced,fps={OUTPUT_FPS},scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,format=yuv420p,settb=AVTB",
             clip.start_seconds(),
             clip.end_seconds(),
         ));
+        let starts_band = index == 0 || !clip.join_with_previous;
+        if starts_band && (index > 0 || show_first_title) {
+            let title_path = working.join(format!("title-{index}.txt"));
+            fs::write(&title_path, clip.band_name.as_bytes())
+                .context("バンド名の一時ファイルを作成できませんでした。")?;
+            let escaped_title = format!("title-{index}.txt");
+            let font_size = measured_font_size(
+                font_path,
+                &clip.band_name,
+                base_font_size,
+                width as f32 * 0.85,
+            );
+            graph.push_str(&format!(
+                ",drawtext=fontfile='{escaped_font}':textfile='{escaped_title}':fontcolor=white:fontsize={font_size:.2}:x=w*0.05:y=h-text_h-h*0.05:alpha='if(lt(t,0.5),t/0.5,if(lt(t,4.5),1,if(lt(t,5),(5-t)/0.5,0)))':enable='between(t,0,5)'"
+            ));
+        }
+        graph.push_str(&format!("[v{index}];\n"));
         graph.push_str(&format!(
             "[{index}:a]atrim=start={:.9}:end={:.9},asetpts=PTS-STARTPTS,aresample=48000:async=0:first_pts=0,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[a{index}];\n",
             clip.start_seconds(),
@@ -329,14 +356,24 @@ fn build_filter_graph(
         for (index, clip) in clips.iter().enumerate().skip(1) {
             let output_video = format!("vx{index}");
             let output_audio = format!("ax{index}");
-            let offset = (accumulated - TRANSITION_SECONDS).max(0.0);
-            graph.push_str(&format!(
-                "[{previous_video}][v{index}]xfade=transition=fade:duration={TRANSITION_SECONDS}:offset={offset:.9}[{output_video}];\n"
-            ));
-            graph.push_str(&format!(
-                "[{previous_audio}][a{index}]acrossfade=d={TRANSITION_SECONDS}:c1=tri:c2=tri[{output_audio}];\n"
-            ));
-            accumulated += clip.duration_seconds() - TRANSITION_SECONDS;
+            if clip.join_with_previous {
+                graph.push_str(&format!(
+                    "[{previous_video}][v{index}]concat=n=2:v=1:a=0[{output_video}];\n"
+                ));
+                graph.push_str(&format!(
+                    "[{previous_audio}][a{index}]concat=n=2:v=0:a=1[{output_audio}];\n"
+                ));
+                accumulated += clip.duration_seconds();
+            } else {
+                let offset = (accumulated - TRANSITION_SECONDS).max(0.0);
+                graph.push_str(&format!(
+                    "[{previous_video}][v{index}]xfade=transition=fade:duration={TRANSITION_SECONDS}:offset={offset:.9}[{output_video}];\n"
+                ));
+                graph.push_str(&format!(
+                    "[{previous_audio}][a{index}]acrossfade=d={TRANSITION_SECONDS}:c1=tri:c2=tri[{output_audio}];\n"
+                ));
+                accumulated += clip.duration_seconds() - TRANSITION_SECONDS;
+            }
             previous_video = output_video;
             previous_audio = output_audio;
         }
@@ -474,16 +511,18 @@ fn chapter_text(clips: &[ClipV1]) -> String {
     let mut cursor = 0.0_f64;
     let mut rows = Vec::with_capacity(clips.len());
     for (index, clip) in clips.iter().enumerate() {
-        let seconds = cursor.floor().max(0.0) as u64;
-        let hours = seconds / 3600;
-        let minutes = (seconds % 3600) / 60;
-        let remainder = seconds % 60;
-        rows.push(format!(
-            "{hours}:{minutes:02}:{remainder:02} {}",
-            clip.band_name
-        ));
+        if index == 0 || !clip.join_with_previous {
+            let seconds = cursor.floor().max(0.0) as u64;
+            let hours = seconds / 3600;
+            let minutes = (seconds % 3600) / 60;
+            let remainder = seconds % 60;
+            rows.push(format!(
+                "{hours}:{minutes:02}:{remainder:02} {}",
+                clip.band_name
+            ));
+        }
         cursor += clip.duration_seconds();
-        if index + 1 < clips.len() {
+        if index + 1 < clips.len() && !clips[index + 1].join_with_previous {
             cursor -= TRANSITION_SECONDS;
         }
     }
@@ -906,10 +945,18 @@ pub async fn transition_preview(request: TransitionPreviewRequest) -> Result<Str
         .out_frame_exclusive
         .saturating_sub((2.0 * current_fps).round() as u64)
         .max(current.in_frame);
+    current.join_with_previous = false;
     next.out_frame_exclusive =
         (next.in_frame + (3.0 * next_fps).round() as u64).min(next.out_frame_exclusive);
     let clips = vec![current, next];
-    let graph = build_filter_graph(&clips, Resolution::P1080, (1280, 720), &font, &working)?;
+    let graph = build_filter_graph_internal(
+        &clips,
+        Resolution::P1080,
+        (1280, 720),
+        &font,
+        &working,
+        false,
+    )?;
     let directory = dirs::cache_dir()
         .context("Windowsのキャッシュフォルダーが見つかりません。")?
         .join("ARTOFFICE-video-maker")
@@ -1024,6 +1071,7 @@ mod tests {
                 needs_conversion: false,
                 conversion_reasons: Vec::new(),
             },
+            join_with_previous: false,
             import_error: None,
         }
     }
@@ -1036,6 +1084,22 @@ mod tests {
             "0:00:00 MOSHIMO\r\n0:00:20 Mrs. GREEN APPLE\r\n"
         );
         assert!((total_duration(&clips) - 50.5).abs() < 0.05);
+    }
+
+    #[test]
+    fn joined_parts_share_one_chapter_without_crossfade() {
+        let first = clip("分割バンド", 10.0);
+        let mut continuation = clip("分割バンド", 8.0);
+        continuation.id = "part-2".to_string();
+        continuation.join_with_previous = true;
+        let next = clip("次のバンド", 20.0);
+        let clips = vec![first, continuation, next];
+
+        assert_eq!(
+            chapter_text(&clips),
+            "0:00:00 分割バンド\r\n0:00:17 次のバンド\r\n"
+        );
+        assert!((total_duration(&clips) - 37.5).abs() < 0.05);
     }
 
     #[test]
@@ -1088,9 +1152,13 @@ mod tests {
         let Some(font) = tools::font() else { return };
         let temp = tempfile::tempdir().unwrap();
         let mut clips = Vec::new();
-        for (index, (color, frequency, name)) in [("red", 440, "バンドA"), ("blue", 660, "Band_B")]
-            .into_iter()
-            .enumerate()
+        for (index, (color, frequency, name)) in [
+            ("red", 440, "バンドA"),
+            ("green", 550, "バンドA-part2"),
+            ("blue", 660, "Band_B"),
+        ]
+        .into_iter()
+        .enumerate()
         {
             let source = temp.path().join(format!("{}_{}.mp4", index + 1, name));
             let status = StdCommand::new(&ffmpeg)
@@ -1114,6 +1182,10 @@ mod tests {
                 .unwrap();
             assert!(status.success());
             let mut value = clip(name, 3.0);
+            if index == 1 {
+                value.band_name = "バンドA".to_string();
+                value.join_with_previous = true;
+            }
             value.source_path = source.to_string_lossy().into_owned();
             value.source_file_name = source.file_name().unwrap().to_string_lossy().into_owned();
             clips.push(value);
@@ -1121,6 +1193,13 @@ mod tests {
 
         let graph =
             build_filter_graph(&clips, Resolution::P1080, (640, 360), &font, temp.path()).unwrap();
+        let graph_text = fs::read_to_string(&graph).unwrap();
+        assert!(graph_text.contains("concat=n=2:v=1:a=0"));
+        assert!(graph_text.contains("concat=n=2:v=0:a=1"));
+        assert!(graph_text.contains("xfade=transition=fade"));
+        assert!(graph_text.contains("textfile='title-0.txt'"));
+        assert!(!graph_text.contains("textfile='title-1.txt'"));
+        assert!(graph_text.contains("textfile='title-2.txt'"));
         let encoder = choose_encoder(&ffmpeg, &CancellationToken::new())
             .await
             .unwrap();
@@ -1156,6 +1235,26 @@ mod tests {
             String::from_utf8_lossy(&result.stderr)
         );
         assert!(output.metadata().unwrap().len() > 10_000);
+        if let Some(ffprobe) = tools::ffprobe() {
+            let probe = StdCommand::new(ffprobe)
+                .args([
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                ])
+                .arg(&output)
+                .output()
+                .unwrap();
+            assert!(probe.status.success());
+            let actual_duration: f64 = String::from_utf8_lossy(&probe.stdout)
+                .trim()
+                .parse()
+                .unwrap();
+            assert!((actual_duration - total_duration(&clips)).abs() < 0.15);
+        }
     }
 
     #[tokio::test]
@@ -1347,6 +1446,7 @@ mod tests {
                 in_frame,
                 out_frame_exclusive,
                 media,
+                join_with_previous: false,
                 import_error: None,
             });
         }

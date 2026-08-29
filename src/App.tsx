@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -20,10 +20,12 @@ import type {
 } from "./types";
 import {
   basename,
+  bandCount,
   chapterRows,
   chapterWarnings,
   centeredCropForAspect,
   clipDurationSeconds,
+  clipGroups,
   duplicateOrders,
   estimateOutputBytes,
   formatBytes,
@@ -34,6 +36,8 @@ import {
   parseClock,
   parseVideoFileName,
   projectDurationSeconds,
+  moveClipGroup,
+  renumberClipOrders,
   secondsToFrame,
   sortClipsByOrder,
   validateProject,
@@ -43,7 +47,7 @@ type Step = "import" | "trim" | "thumbnail" | "export";
 
 const EMPTY_PROJECT: ProjectV1 = {
   schemaVersion: 1,
-  appVersion: "0.1.0",
+  appVersion: "0.2.0",
   eventName: "",
   clips: [],
   outputResolution: "1080p",
@@ -186,6 +190,7 @@ export default function App() {
             inFrame: 0,
             outFrameExclusive: result.media.frameCount,
             media: result.media,
+            joinWithPrevious: false,
             importError: parsed ? undefined : "ファイル名を「出演順_バンド名.MP4」にしてください。",
           });
         });
@@ -350,21 +355,77 @@ export default function App() {
     }));
   }
 
+  function updateBandName(id: string, bandName: string) {
+    updateProject((current) => {
+      const groups = clipGroups(current.clips);
+      const group = groups.find((candidate) => candidate.some((clip) => clip.id === id));
+      if (!group) return current;
+      const ids = new Set(group.map((clip) => clip.id));
+      return {
+        ...current,
+        clips: current.clips.map((clip) => ids.has(clip.id) ? {
+          ...clip,
+          bandName,
+          importError: clip.importError?.startsWith("ファイル名") ? undefined : clip.importError,
+        } : clip),
+      };
+    });
+  }
+
   function removeClip(id: string) {
-    updateProject((current) => ({ ...current, clips: current.clips.filter((clip) => clip.id !== id) }));
+    updateProject((current) => {
+      const clips = [...current.clips];
+      const index = clips.findIndex((clip) => clip.id === id);
+      if (index < 0) return current;
+      const removedStartedBand = index === 0 || !clips[index].joinWithPrevious;
+      clips.splice(index, 1);
+      if (removedStartedBand && clips[index]?.joinWithPrevious) {
+        clips[index] = { ...clips[index], joinWithPrevious: false };
+      }
+      return { ...current, clips: renumberClipOrders(clips) };
+    });
   }
 
   function moveClip(sourceId: string, targetId: string) {
     if (sourceId === targetId) return;
     updateProject((current) => {
-      const clips = [...current.clips];
-      const from = clips.findIndex((clip) => clip.id === sourceId);
-      const to = clips.findIndex((clip) => clip.id === targetId);
-      if (from < 0 || to < 0) return current;
-      const [moved] = clips.splice(from, 1);
-      clips.splice(to, 0, moved);
-      return { ...current, clips: clips.map((clip, index) => ({ ...clip, order: index + 1 })) };
+      const clips = moveClipGroup(current.clips, sourceId, targetId);
+      return clips === current.clips ? current : { ...current, clips };
     });
+  }
+
+  function moveClipByDirection(id: string, direction: -1 | 1) {
+    updateProject((current) => {
+      const groups = clipGroups(current.clips);
+      const sourceIndex = groups.findIndex((group) => group.some((clip) => clip.id === id));
+      const target = groups[sourceIndex + direction]?.[0];
+      if (sourceIndex < 0 || !target) return current;
+      return { ...current, clips: moveClipGroup(current.clips, id, target.id) };
+    });
+  }
+
+  function setJoinWithPrevious(id: string, joined: boolean) {
+    updateProject((current) => {
+      const index = current.clips.findIndex((clip) => clip.id === id);
+      if (index <= 0) return current;
+      const clips = current.clips.map((clip) => ({ ...clip }));
+      clips[index].joinWithPrevious = joined;
+      if (joined) {
+        let previousRoot = index - 1;
+        while (previousRoot > 0 && clips[previousRoot].joinWithPrevious) previousRoot -= 1;
+        const bandName = clips[previousRoot].bandName;
+        clips[index].bandName = bandName;
+        if (clips[index].importError?.startsWith("ファイル名")) clips[index].importError = undefined;
+        for (let cursor = index + 1; cursor < clips.length && clips[cursor].joinWithPrevious; cursor += 1) {
+          clips[cursor].bandName = bandName;
+          if (clips[cursor].importError?.startsWith("ファイル名")) clips[cursor].importError = undefined;
+        }
+      }
+      return { ...current, clips: renumberClipOrders(clips) };
+    });
+    setNotice(joined
+      ? "前の動画と同じバンドの分割パートとして連結します。"
+      : "この動画を別のバンドとして扱います。");
   }
 
   async function chooseThumbnail() {
@@ -561,11 +622,13 @@ export default function App() {
             onChooseFiles={chooseVideoFiles}
             onChooseFolder={chooseVideoFolder}
             onRelink={relinkMissingSources}
-            onUpdateClip={updateClip}
+            onBandName={updateBandName}
             onRemoveClip={removeClip}
+            onSetJoin={setJoinWithPrevious}
+            onMoveDirection={moveClipByDirection}
             onDragStart={setDraggedClipId}
-            onDrop={(targetId) => {
-              if (draggedClipId) moveClip(draggedClipId, targetId);
+            onDrop={(sourceId, targetId) => {
+              moveClip(sourceId, targetId);
               setDraggedClipId(null);
             }}
             onNext={() => setStep("trim")}
@@ -638,15 +701,35 @@ interface ImportStepProps {
   onChooseFiles: () => void;
   onChooseFolder: () => void;
   onRelink: () => void;
-  onUpdateClip: (id: string, updater: (clip: ClipV1) => ClipV1) => void;
+  onBandName: (id: string, value: string) => void;
   onRemoveClip: (id: string) => void;
+  onSetJoin: (id: string, joined: boolean) => void;
+  onMoveDirection: (id: string, direction: -1 | 1) => void;
   onDragStart: (id: string | null) => void;
-  onDrop: (id: string) => void;
+  onDrop: (sourceId: string, targetId: string) => void;
   onNext: () => void;
 }
 
 function ImportStep(props: ImportStepProps) {
   const hasMissing = props.project.clips.some((clip) => Boolean(clip.importError));
+  const groups = clipGroups(props.project.clips);
+  const positions = new Map<string, { groupIndex: number; partIndex: number; partCount: number }>();
+  groups.forEach((group, groupIndex) => group.forEach((clip, partIndex) => {
+    positions.set(clip.id, { groupIndex, partIndex, partCount: group.length });
+  }));
+
+  function beginDrag(event: DragEvent<HTMLElement>, id: string) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", id);
+    props.onDragStart(id);
+  }
+
+  function acceptDrop(event: DragEvent<HTMLElement>, targetId: string) {
+    event.preventDefault();
+    const sourceId = event.dataTransfer.getData("text/plain") || props.draggedClipId;
+    if (sourceId) props.onDrop(sourceId, targetId);
+  }
+
   return (
     <section className="step-panel">
       <div className="section-heading">
@@ -672,33 +755,42 @@ function ImportStep(props: ImportStepProps) {
       ) : (
         <div className="clip-table-wrap">
           <div className="clip-table-header">
-            <span>{props.project.clips.length}本・ドラッグして並べ替え</span>
+            <span>{bandCount(props.project.clips)}バンド・動画{props.project.clips.length}本・ハンドルをドラッグして並べ替え</span>
             {hasMissing && <button className="secondary small" onClick={props.onRelink}>元動画を再リンク</button>}
           </div>
           <div className="clip-table">
-            {props.project.clips.map((clip, index) => (
+            {props.project.clips.map((clip, index) => {
+              const position = positions.get(clip.id)!;
+              const joined = position.partIndex > 0;
+              return (
               <div
                 key={clip.id}
-                className={`clip-row ${props.draggedClipId === clip.id ? "dragging" : ""}`}
-                draggable
-                onDragStart={() => props.onDragStart(clip.id)}
-                onDragEnd={() => props.onDragStart(null)}
-                onDragOver={(event) => event.preventDefault()}
-                onDrop={() => props.onDrop(clip.id)}
+                className={`clip-row ${props.draggedClipId === clip.id ? "dragging" : ""} ${joined ? "continuation" : ""}`}
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "move";
+                }}
+                onDrop={(event) => acceptDrop(event, clip.id)}
               >
-                <span className="drag-handle" title="ドラッグして並べ替え">⠿</span>
-                <span className={`order-badge ${props.duplicateSet.has(clip.order) ? "warning" : ""}`}>{clip.order}</span>
+                <span
+                  className="drag-handle"
+                  title="ドラッグして並べ替え"
+                  draggable
+                  aria-label={`${clip.bandName}を並べ替え`}
+                  onDragStart={(event) => beginDrag(event, clip.id)}
+                  onDragEnd={() => props.onDragStart(null)}
+                >⠿</span>
+                <span className={`order-badge ${props.duplicateSet.has(clip.order) ? "warning" : ""}`} title={joined ? `パート${position.partIndex + 1}` : `出演順${clip.order}`}>
+                  {joined ? "↳" : clip.order}
+                </span>
                 <div className="clip-name-cell">
                   <input
                     value={clip.bandName}
-                    onChange={(event) => props.onUpdateClip(clip.id, (current) => ({
-                      ...current,
-                      bandName: event.target.value,
-                      importError: current.importError?.startsWith("ファイル名") ? undefined : current.importError,
-                    }))}
+                    disabled={joined}
+                    onChange={(event) => props.onBandName(clip.id, event.target.value)}
                     aria-label={`${index + 1}番目のバンド名`}
                   />
-                  <small title={clip.sourcePath}>{clip.sourceFileName}</small>
+                  <small title={clip.sourcePath}>{joined ? `連結パート${position.partIndex + 1}・` : ""}{clip.sourceFileName}</small>
                 </div>
                 <div className="media-summary">
                   <span>{clip.media.width}×{clip.media.height}</span>
@@ -711,9 +803,25 @@ function ImportStep(props: ImportStepProps) {
                     <small>{clip.importError ?? clip.media.conversionReasons.join("，")}</small>
                   )}
                 </div>
+                <div className="join-cell">
+                  {index === 0 ? (
+                    <span>先頭の動画</span>
+                  ) : (
+                    <button
+                      className={joined ? "join-button active" : "join-button"}
+                      onClick={() => props.onSetJoin(clip.id, !joined)}
+                      title={joined ? "この動画を別のバンドに戻す" : "前の動画と同じバンドとして直結する"}
+                    >{joined ? "✓ 前と連結" : "前と連結"}</button>
+                  )}
+                </div>
+                <div className="move-buttons">
+                  <button onClick={() => props.onMoveDirection(clip.id, -1)} disabled={position.groupIndex === 0} aria-label={`${clip.bandName}を上へ移動`}>↑</button>
+                  <button onClick={() => props.onMoveDirection(clip.id, 1)} disabled={position.groupIndex === groups.length - 1} aria-label={`${clip.bandName}を下へ移動`}>↓</button>
+                </div>
                 <button className="icon-button" onClick={() => props.onRemoveClip(clip.id)} aria-label={`${clip.bandName}を削除`}>×</button>
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -744,9 +852,15 @@ function TrimStep({ clips, selected, onSelect, onUpdate, onNext, onError }: Trim
   const inSeconds = frameToSeconds(selected.inFrame, fps);
   const outSeconds = frameToSeconds(selected.outFrameExclusive, fps);
   const titleTime = currentTime - inSeconds;
-  const titleOpacity = titleTime < 0 || titleTime >= 5 ? 0 : titleTime < 0.5 ? titleTime / 0.5 : titleTime < 4.5 ? 1 : (5 - titleTime) / 0.5;
+  const titleOpacity = selected.joinWithPrevious || titleTime < 0 || titleTime >= 5 ? 0 : titleTime < 0.5 ? titleTime / 0.5 : titleTime < 4.5 ? 1 : (5 - titleTime) / 0.5;
   const nextIndex = clips.findIndex((clip) => clip.id === selected.id) + 1;
   const nextClip = nextIndex > 0 && nextIndex < clips.length ? clips[nextIndex] : null;
+  const groups = clipGroups(clips);
+  const positions = new Map<string, { bandIndex: number; partIndex: number; partCount: number }>();
+  groups.forEach((group, bandIndex) => group.forEach((clip, partIndex) => {
+    positions.set(clip.id, { bandIndex, partIndex, partCount: group.length });
+  }));
+  const selectedPosition = positions.get(selected.id)!;
 
   useEffect(() => {
     setCurrentTime(inSeconds);
@@ -788,17 +902,21 @@ function TrimStep({ clips, selected, onSelect, onUpdate, onNext, onError }: Trim
   return (
     <section className="editor-layout">
       <aside className="clip-sidebar">
-        <div className="sidebar-title"><span>出演バンド</span><strong>{clips.length}</strong></div>
-        {clips.map((clip, index) => (
+        <div className="sidebar-title"><span>{bandCount(clips)}バンド・動画{clips.length}本</span><strong>{clips.length}</strong></div>
+        {clips.map((clip) => {
+          const position = positions.get(clip.id)!;
+          return (
           <button key={clip.id} className={clip.id === selected.id ? "selected" : ""} onClick={() => onSelect(clip.id)}>
-            <span>{index + 1}</span><div><strong>{clip.bandName}</strong><small>{formatClock(clipDurationSeconds(clip)).replace(/\.\d{3}$/, "")}</small></div>
+            <span>{position.partCount > 1 ? `${position.bandIndex + 1}.${position.partIndex + 1}` : position.bandIndex + 1}</span>
+            <div><strong>{clip.bandName}{position.partCount > 1 ? `・パート${position.partIndex + 1}` : ""}</strong><small>{formatClock(clipDurationSeconds(clip)).replace(/\.\d{3}$/, "")}</small></div>
           </button>
-        ))}
+          );
+        })}
       </aside>
 
       <div className="trim-workspace">
         <div className="section-heading compact">
-          <div><span className="eyebrow">STEP 2</span><h1>{selected.bandName}</h1><p>残したい範囲の開始点と終了点を決めます。</p></div>
+          <div><span className="eyebrow">STEP 2</span><h1>{selected.bandName}{selectedPosition.partCount > 1 ? `・パート${selectedPosition.partIndex + 1}` : ""}</h1><p>残したい範囲の開始点と終了点を決めます。</p></div>
           <span className="clip-counter">{clips.findIndex((clip) => clip.id === selected.id) + 1} / {clips.length}</span>
         </div>
 
@@ -881,12 +999,12 @@ function TrimStep({ clips, selected, onSelect, onUpdate, onNext, onError }: Trim
         </div>
 
         <div className="transition-preview-card">
-          <div><strong>つなぎ目プレビュー</strong><small>{nextClip ? `${selected.bandName} → ${nextClip.bandName}` : "最後のバンドです"}</small></div>
+          <div><strong>{nextClip?.joinWithPrevious ? "分割動画の連結プレビュー" : "つなぎ目プレビュー"}</strong><small>{nextClip ? nextClip.joinWithPrevious ? `${selected.sourceFileName}の直後に${nextClip.sourceFileName}を連結` : `${selected.bandName} → ${nextClip.bandName}` : "最後の動画です"}</small></div>
           {transitionPreview && <video src={transitionPreview} controls autoPlay />}
-          <button className="secondary" disabled={!nextClip || previewBusy} onClick={renderTransitionPreview}>{previewBusy ? "作成中…" : "0.5秒クロスフェードを確認"}</button>
+          <button className="secondary" disabled={!nextClip || previewBusy} onClick={renderTransitionPreview}>{previewBusy ? "作成中…" : nextClip?.joinWithPrevious ? "連結部分を確認" : "0.5秒クロスフェードを確認"}</button>
         </div>
 
-        <div className="step-footer"><span>バンド名は冒頭5秒に白文字で表示されます。</span><button className="primary" onClick={onNext}>サムネイルへ進む <span>→</span></button></div>
+        <div className="step-footer"><span>バンド名は各バンドの最初の動画だけに表示されます。</span><button className="primary" onClick={onNext}>サムネイルへ進む <span>→</span></button></div>
       </div>
     </section>
   );
@@ -1024,7 +1142,7 @@ function ExportStep(props: ExportStepProps) {
             </ul>
           </div>
           <div className="settings-card summary-stats">
-            <div><span>バンド数</span><strong>{props.project.clips.length}</strong></div>
+            <div><span>バンド数</span><strong>{bandCount(props.project.clips)}</strong></div>
             <div><span>完成時間</span><strong>{formatChapterTime(props.durationSeconds)}</strong></div>
             <div><span>推定容量</span><strong>{formatBytes(estimatedBytes)}</strong></div>
             <div><span>音声</span><strong>AAC 384kbps</strong></div>

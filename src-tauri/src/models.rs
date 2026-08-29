@@ -56,6 +56,8 @@ pub struct ClipV1 {
     pub out_frame_exclusive: u64,
     pub media: MediaInfo,
     #[serde(default)]
+    pub join_with_previous: bool,
+    #[serde(default)]
     pub import_error: Option<String>,
 }
 
@@ -110,7 +112,7 @@ impl ProjectV1 {
     pub fn validate(&self) -> anyhow::Result<()> {
         anyhow::ensure!(self.schema_version == 1, "未対応のプロジェクト形式です。");
         anyhow::ensure!(
-            self.app_version == "0.1.0",
+            matches!(self.app_version.as_str(), "0.1.0" | "0.2.0"),
             "未対応のアプリバージョンです。"
         );
         anyhow::ensure!(
