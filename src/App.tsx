@@ -47,7 +47,7 @@ type Step = "import" | "trim" | "thumbnail" | "export";
 
 const EMPTY_PROJECT: ProjectV1 = {
   schemaVersion: 1,
-  appVersion: "0.2.0",
+  appVersion: "0.2.1",
   eventName: "",
   clips: [],
   outputResolution: "1080p",
@@ -733,7 +733,7 @@ function ImportStep(props: ImportStepProps) {
   return (
     <section className="step-panel">
       <div className="section-heading">
-        <div><span className="eyebrow">STEP 1</span><h1>動画を読み込む</h1><p>ファイル名から出演順とバンド名を自動で読み取ります。</p></div>
+        <div><span className="eyebrow">STEP 1</span><h1>動画を読み込む</h1></div>
         <div className="heading-actions">
           <button className="secondary" onClick={props.onChooseFiles} disabled={props.busy}>MP4を選択</button>
           <button className="primary" onClick={props.onChooseFolder} disabled={props.busy}>フォルダーを選択</button>
@@ -742,15 +742,13 @@ function ImportStep(props: ImportStepProps) {
 
       <label className="field event-name-field">
         <span>イベント名</span>
-        <input value={props.project.eventName} onChange={(event) => props.onEventName(event.target.value)} placeholder="例：8月ライブ 1日目" />
-        <small>完成ファイルの名前に使います。</small>
+        <input value={props.project.eventName} onChange={(event) => props.onEventName(event.target.value)} />
       </label>
 
       {props.project.clips.length === 0 ? (
         <div className="empty-state">
           <div className="empty-icon">＋</div>
           <h2>ライブ動画を追加してください</h2>
-          <p><code>1_MOSHIMO.MP4</code>のような名前のMP4をまとめて読み込めます。</p>
         </div>
       ) : (
         <div className="clip-table-wrap">
@@ -827,7 +825,6 @@ function ImportStep(props: ImportStepProps) {
       )}
 
       <div className="step-footer">
-        <span>元動画は移動・変更しません。</span>
         <button className="primary" onClick={props.onNext} disabled={props.project.clips.length === 0}>トリミングへ進む <span>→</span></button>
       </div>
     </section>
@@ -916,7 +913,7 @@ function TrimStep({ clips, selected, onSelect, onUpdate, onNext, onError }: Trim
 
       <div className="trim-workspace">
         <div className="section-heading compact">
-          <div><span className="eyebrow">STEP 2</span><h1>{selected.bandName}{selectedPosition.partCount > 1 ? `・パート${selectedPosition.partIndex + 1}` : ""}</h1><p>残したい範囲の開始点と終了点を決めます。</p></div>
+          <div><span className="eyebrow">STEP 2</span><h1>{selected.bandName}{selectedPosition.partCount > 1 ? `・パート${selectedPosition.partIndex + 1}` : ""}</h1></div>
           <span className="clip-counter">{clips.findIndex((clip) => clip.id === selected.id) + 1} / {clips.length}</span>
         </div>
 
@@ -1004,7 +1001,7 @@ function TrimStep({ clips, selected, onSelect, onUpdate, onNext, onError }: Trim
           <button className="secondary" disabled={!nextClip || previewBusy} onClick={renderTransitionPreview}>{previewBusy ? "作成中…" : nextClip?.joinWithPrevious ? "連結部分を確認" : "0.5秒クロスフェードを確認"}</button>
         </div>
 
-        <div className="step-footer"><span>バンド名は各バンドの最初の動画だけに表示されます。</span><button className="primary" onClick={onNext}>サムネイルへ進む <span>→</span></button></div>
+        <div className="step-footer"><button className="primary" onClick={onNext}>サムネイルへ進む <span>→</span></button></div>
       </div>
     </section>
   );
@@ -1057,13 +1054,13 @@ function ThumbnailStep({ thumbnail, busy, onChoose, onRemove, onCropComplete, on
   return (
     <section className="step-panel">
       <div className="section-heading">
-        <div><span className="eyebrow">STEP 3</span><h1>サムネイルを切り抜く</h1><p>集合写真を16:9に整え，1920×1080のJPEGにします。</p></div>
+        <div><span className="eyebrow">STEP 3</span><h1>サムネイルを切り抜く</h1></div>
         <div className="heading-actions"><button className="primary" onClick={onChoose} disabled={busy}>集合写真を選択</button></div>
       </div>
 
       {!thumbnail ? (
         <div className="empty-state thumbnail-empty">
-          <div className="empty-icon photo">▧</div><h2>集合写真は任意です</h2><p>JPG，PNG，HEIC，HEIFに対応します。選択しない場合，サムネイルは出力しません。</p>
+          <div className="empty-icon photo">▧</div><p>JPG，PNG，HEIC，HEIFに対応します。選択しない場合，サムネイルは出力しません。</p>
           <button className="secondary" onClick={onChoose} disabled={busy}>{busy ? "画像を処理中…" : "写真を選択"}</button>
         </div>
       ) : (
@@ -1093,7 +1090,7 @@ function ThumbnailStep({ thumbnail, busy, onChoose, onRemove, onCropComplete, on
         </div>
       )}
 
-      <div className="step-footer"><span>文字や装飾は追加しません。</span><button className="primary" onClick={onNext}>書き出しへ進む <span>→</span></button></div>
+      <div className="step-footer"><button className="primary" onClick={onNext}>書き出しへ進む <span>→</span></button></div>
     </section>
   );
 }
@@ -1119,7 +1116,7 @@ function ExportStep(props: ExportStepProps) {
 
   return (
     <section className="step-panel export-panel">
-      <div className="section-heading"><div><span className="eyebrow">STEP 4</span><h1>完成動画を書き出す</h1><p>設定を確認して，MP4とチャプターテキストを作成します。</p></div></div>
+      <div className="section-heading"><div><span className="eyebrow">STEP 4</span><h1>完成動画を書き出す</h1></div></div>
       <div className="export-grid">
         <div className="export-settings">
           <div className="settings-card">
@@ -1150,7 +1147,7 @@ function ExportStep(props: ExportStepProps) {
         </div>
 
         <aside className="chapter-preview">
-          <div className="chapter-header"><div><h2>チャプタープレビュー</h2><small>クロスフェード開始時刻・秒未満切り捨て</small></div><span>TXT</span></div>
+          <div className="chapter-header"><h2>チャプタープレビュー</h2></div>
           <pre>{rows.map((row) => `${formatChapterTime(row.seconds)} ${row.text}`).join("\r\n") || "動画を読み込んでください"}</pre>
           {warnings.map((warning) => <p className="warning-text" key={warning}>⚠ {warning}</p>)}
         </aside>
@@ -1170,7 +1167,6 @@ function ExportStep(props: ExportStepProps) {
       )}
 
       <div className="step-footer export-footer">
-        <span>書き出し中はPCがスリープしないようにします。</span>
         <button className="primary large" onClick={props.onStart} disabled={Boolean(props.renderJobId)}>書き出しを開始</button>
       </div>
     </section>

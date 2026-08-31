@@ -112,7 +112,7 @@ impl ProjectV1 {
     pub fn validate(&self) -> anyhow::Result<()> {
         anyhow::ensure!(self.schema_version == 1, "未対応のプロジェクト形式です。");
         anyhow::ensure!(
-            matches!(self.app_version.as_str(), "0.1.0" | "0.2.0"),
+            matches!(self.app_version.as_str(), "0.1.0" | "0.2.0" | "0.2.1"),
             "未対応のアプリバージョンです。"
         );
         anyhow::ensure!(

@@ -30,7 +30,7 @@ macOSには対応していません。
 このアプリはインストーラーを使いません。ZIPをダウンロードして展開するだけで利用できます。
 
 1. [最新版のダウンロードページ](https://github.com/Yuto-0906/ARTOFFICE-video-maker/releases/latest)を開きます。
-2. ページ下部の「Assets」を開き，`ARTOFFICE-video-maker-v0.2.0-windows-x64.zip`をクリックします。
+2. ページ下部の「Assets」を開き，`ARTOFFICE-video-maker-v0.2.1-windows-x64.zip`をクリックします。
 3. ダウンロードしたZIPを右クリックし，「すべて展開」を選びます。
 4. 展開先を選び，「展開」を押します。デスクトップやドキュメント内で構いません。
 5. 展開してできたフォルダーを開きます。

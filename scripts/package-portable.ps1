@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [switch]$SkipBuild,
-    [switch]$SkipFetch
+    [switch]$SkipFetch,
+    [string]$ApplicationPath
 )
 
 $ErrorActionPreference = "Stop"
@@ -31,7 +32,11 @@ if (-not $SkipBuild) {
     }
 }
 
-$application = Join-Path $repoRoot "src-tauri\target\release\artoffice-video-maker.exe"
+$application = if ([string]::IsNullOrWhiteSpace($ApplicationPath)) {
+    Join-Path $repoRoot "src-tauri\target\release\artoffice-video-maker.exe"
+} else {
+    (Resolve-Path -LiteralPath $ApplicationPath).Path
+}
 foreach ($required in @(
     $application,
     (Join-Path $vendorTools "ffmpeg\bin\ffmpeg.exe"),

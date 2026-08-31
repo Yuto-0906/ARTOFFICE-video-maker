@@ -150,6 +150,7 @@ input { width: 100%; border: 1px solid var(--border); border-radius: 9px; paddin
 .move-buttons button:disabled { opacity: .3; cursor: default; }
 
 .step-footer { margin-top: 22px; display: flex; align-items: center; justify-content: space-between; gap: 18px; color: var(--muted); font-size: 12px; }
+.step-footer > button:only-child { margin-left: auto; }
 .step-footer button span { margin-left: 7px; }
 
 .editor-layout { min-height: calc(100vh - 144px); display: grid; grid-template-columns: 230px 1fr; }
