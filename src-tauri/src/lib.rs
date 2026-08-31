@@ -7,7 +7,7 @@ mod tools;
 
 use models::{
     OutputPaths, PreparedThumbnail, ProbeResult, ProjectV1, RenderRequest, RenderStarted,
-    ToolStatus, TransitionPreviewRequest,
+    ToolStatus,
 };
 use render::RenderState;
 use tauri::{AppHandle, Manager, State};
@@ -69,13 +69,6 @@ async fn cancel_render(state: State<'_, RenderState>, job_id: String) -> Result<
     Ok(state.cancel(&job_id).await)
 }
 
-#[tauri::command]
-async fn render_transition_preview(request: TransitionPreviewRequest) -> Result<String, String> {
-    render::transition_preview(request)
-        .await
-        .map_err(command_error)
-}
-
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -100,7 +93,6 @@ pub fn run() {
             output_paths,
             start_render,
             cancel_render,
-            render_transition_preview,
         ])
         .run(tauri::generate_context!())
         .expect("ARTOFFICE広報動画作成ソフトを起動できませんでした");

@@ -104,6 +104,11 @@ button.large { padding: 13px 28px; font-size: 15px; }
 .banner pre { margin: 0; white-space: pre-wrap; font-family: inherit; }
 .notice-banner { background: var(--green-soft); color: var(--green); border: 1px solid color-mix(in srgb, var(--green) 25%, transparent); }
 .error-banner { background: var(--accent-soft); color: var(--danger); border: 1px solid color-mix(in srgb, var(--danger) 25%, transparent); }
+.file-drop-overlay { position: fixed; inset: 154px 22px 22px; z-index: 90; display: grid; place-items: center; border: 3px dashed var(--accent); border-radius: 20px; background: color-mix(in srgb, var(--accent-soft) 88%, transparent); backdrop-filter: blur(5px); pointer-events: none; }
+.file-drop-overlay > div { min-width: 360px; padding: 32px 44px; border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); border-radius: 16px; background: var(--panel); color: var(--accent); text-align: center; box-shadow: var(--shadow); }
+.file-drop-overlay span, .file-drop-overlay strong { display: block; }
+.file-drop-overlay span { margin-bottom: 10px; font-size: 36px; line-height: 1; }
+.file-drop-overlay strong { font-size: 18px; }
 
 .field { display: grid; gap: 7px; }
 .field > span { font-size: 12px; font-weight: 700; }
@@ -118,6 +123,7 @@ input { width: 100%; border: 1px solid var(--border); border-radius: 9px; paddin
 .empty-state button { margin-top: 18px; }
 .empty-icon { width: 58px; height: 58px; display: grid; place-items: center; border-radius: 18px; background: var(--accent-soft); color: var(--accent); font-size: 28px; }
 .empty-icon.photo { font-size: 25px; }
+.drop-prompt { margin: 16px 0 6px; font-size: 17px; }
 
 .clip-table-wrap { border: 1px solid var(--border); border-radius: 14px; background: var(--panel); overflow: hidden; box-shadow: var(--shadow); }
 .clip-table-header { min-height: 46px; padding: 8px 15px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 12px; }
@@ -125,8 +131,10 @@ input { width: 100%; border: 1px solid var(--border); border-radius: 9px; paddin
 .clip-row { min-width: 880px; min-height: 74px; display: grid; grid-template-columns: 30px 42px minmax(190px, 1.4fr) minmax(170px, .9fr) minmax(130px, .8fr) 112px 68px 32px; gap: 10px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); }
 .clip-row:last-child { border-bottom: 0; }
 .clip-row.dragging { opacity: .4; }
+.clip-row.drop-target { box-shadow: inset 0 3px var(--accent); }
 .clip-row.continuation { background: color-mix(in srgb, var(--accent-soft) 38%, var(--panel)); box-shadow: inset 3px 0 var(--accent); }
-.drag-handle { width: 28px; height: 34px; display: grid; place-items: center; color: var(--muted); cursor: grab; font-size: 20px; user-select: none; }
+.clip-row.continuation.drop-target { box-shadow: inset 3px 0 var(--accent), inset 0 3px var(--accent); }
+.drag-handle { width: 28px; height: 34px; display: grid; place-items: center; color: var(--muted); cursor: grab; font-size: 20px; user-select: none; touch-action: none; }
 .drag-handle:active { cursor: grabbing; }
 .order-badge { width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; background: var(--panel-2); font-weight: 800; font-size: 12px; }
 .order-badge.warning { background: var(--orange-soft); color: var(--orange); }
@@ -168,7 +176,7 @@ input { width: 100%; border: 1px solid var(--border); border-radius: 9px; paddin
 .video-stage { position: relative; aspect-ratio: 16 / 9; overflow: hidden; border-radius: 13px; background: #050505; box-shadow: var(--shadow); }
 .video-stage video { width: 100%; height: 100%; display: block; object-fit: contain; }
 .band-title-preview { position: absolute; left: 5%; bottom: 5%; max-width: 85%; color: white; font-family: "AOV Noto Sans JP", "Noto Sans JP", sans-serif; font-size: clamp(32px, 5vw, 72px); font-weight: 900; line-height: 1.12; white-space: nowrap; overflow: hidden; text-overflow: clip; pointer-events: none; }
-.timeline-card, .transition-preview-card { margin-top: 15px; padding: 15px 18px; border-radius: 12px; background: var(--panel); border: 1px solid var(--border); }
+.timeline-card { margin-top: 15px; padding: 15px 18px; border-radius: 12px; background: var(--panel); border: 1px solid var(--border); }
 .timeline-labels { display: flex; align-items: center; justify-content: space-between; color: var(--muted); font-size: 10px; }
 .timeline-labels strong { color: var(--text); font-variant-numeric: tabular-nums; }
 .dual-range { position: relative; height: 30px; margin: 8px 0 10px; }
@@ -183,12 +191,6 @@ input { width: 100%; border: 1px solid var(--border); border-radius: 9px; paddin
 .mark-control button { padding: 8px 10px; font-size: 10px; }
 .frame-controls { display: grid; grid-template-columns: repeat(2, auto); gap: 5px; }
 .frame-controls button { padding: 7px 9px; background: var(--panel-2); border: 1px solid var(--border); font-size: 9px; }
-.transition-preview-card { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.transition-preview-card strong, .transition-preview-card small { display: block; }
-.transition-preview-card strong { font-size: 12px; }
-.transition-preview-card small { margin-top: 3px; color: var(--muted); font-size: 10px; }
-.transition-preview-card video { width: 230px; max-height: 130px; border-radius: 8px; background: black; }
-
 .thumbnail-empty { min-height: 420px; }
 .thumbnail-editor { min-height: 520px; display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 20px; }
 .crop-stage { position: relative; min-height: 520px; border-radius: 14px; overflow: hidden; background: #090a0c; box-shadow: var(--shadow); }

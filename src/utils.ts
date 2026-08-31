@@ -3,6 +3,14 @@ import type { ClipV1, ParsedFileName, ProjectV1, Rational } from "./types";
 export const OUTPUT_FPS: Rational = { numerator: 60000, denominator: 1001 };
 export const TRANSITION_SECONDS = 0.5;
 
+export function isMp4Path(path: string): boolean {
+  return /\.mp4$/i.test(path);
+}
+
+export function isThumbnailImagePath(path: string): boolean {
+  return /\.(?:jpe?g|png|heic|heif)$/i.test(path);
+}
+
 export function centeredCropForAspect(width: number, height: number, aspect = 16 / 9) {
   if (width <= 0 || height <= 0 || !Number.isFinite(aspect) || aspect <= 0) {
     return { x: 0, y: 0, width: 1, height: 1 };
@@ -172,7 +180,7 @@ export function validateProject(value: unknown): value is ProjectV1 {
   const project = value as Partial<ProjectV1>;
   return (
     project.schemaVersion === 1 &&
-    (project.appVersion === "0.1.0" || project.appVersion === "0.2.0" || project.appVersion === "0.2.1") &&
+    (project.appVersion === "0.1.0" || project.appVersion === "0.2.0" || project.appVersion === "0.2.1" || project.appVersion === "0.3.0") &&
     typeof project.eventName === "string" &&
     Array.isArray(project.clips) &&
     (project.outputResolution === "1080p" || project.outputResolution === "1440p") &&

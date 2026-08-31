@@ -112,7 +112,10 @@ impl ProjectV1 {
     pub fn validate(&self) -> anyhow::Result<()> {
         anyhow::ensure!(self.schema_version == 1, "未対応のプロジェクト形式です。");
         anyhow::ensure!(
-            matches!(self.app_version.as_str(), "0.1.0" | "0.2.0" | "0.2.1"),
+            matches!(
+                self.app_version.as_str(),
+                "0.1.0" | "0.2.0" | "0.2.1" | "0.3.0"
+            ),
             "未対応のアプリバージョンです。"
         );
         anyhow::ensure!(
@@ -229,11 +232,4 @@ pub struct RenderFinished {
     pub encoder: Option<String>,
     pub output_paths: Option<OutputPaths>,
     pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TransitionPreviewRequest {
-    pub current: ClipV1,
-    pub next: ClipV1,
 }

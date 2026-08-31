@@ -21,7 +21,7 @@ use uuid::Uuid;
 use crate::{
     models::{
         ClipV1, OutputPaths, RenderFinished, RenderProgress, RenderRequest, RenderStarted,
-        Resolution, TransitionPreviewRequest,
+        Resolution,
     },
     thumbnail, tools,
 };
@@ -928,84 +928,6 @@ pub async fn start(
         state_for_task.jobs.lock().await.remove(&result_id);
     });
     Ok(RenderStarted { job_id })
-}
-
-pub async fn transition_preview(request: TransitionPreviewRequest) -> Result<String> {
-    let ffmpeg = tools::ffmpeg().context("FFmpegが見つかりません。")?;
-    let font = tools::font().context("Noto Sans JP Blackが見つかりません。")?;
-    let cancellation = CancellationToken::new();
-    let encoder = choose_encoder(&ffmpeg, &cancellation).await?;
-    let id = Uuid::new_v4().to_string();
-    let working = working_directory(&format!("preview-{id}"))?;
-    let mut current = request.current;
-    let mut next = request.next;
-    let current_fps = current.media.fps.value();
-    let next_fps = next.media.fps.value();
-    current.in_frame = current
-        .out_frame_exclusive
-        .saturating_sub((2.0 * current_fps).round() as u64)
-        .max(current.in_frame);
-    current.join_with_previous = false;
-    next.out_frame_exclusive =
-        (next.in_frame + (3.0 * next_fps).round() as u64).min(next.out_frame_exclusive);
-    let clips = vec![current, next];
-    let graph = build_filter_graph_internal(
-        &clips,
-        Resolution::P1080,
-        (1280, 720),
-        &font,
-        &working,
-        false,
-    )?;
-    let directory = dirs::cache_dir()
-        .context("Windowsのキャッシュフォルダーが見つかりません。")?
-        .join("ARTOFFICE-video-maker")
-        .join("transition-previews");
-    fs::create_dir_all(&directory)?;
-    let output_path = directory.join(format!("transition-{id}.mp4"));
-    let mut command = Command::new(&ffmpeg);
-    tools::hide_console(&mut command);
-    command.current_dir(&working);
-    command
-        .arg("-hide_banner")
-        .arg("-loglevel")
-        .arg("error")
-        .arg("-y");
-    for clip in &clips {
-        command.arg("-i").arg(&clip.source_path);
-    }
-    command
-        .arg("-filter_complex_script")
-        .arg(&graph)
-        .arg("-map")
-        .arg("[vout]")
-        .arg("-map")
-        .arg("[aout]")
-        .arg("-c:v")
-        .arg(encoder.codec)
-        .args(encoder_args(&encoder, Resolution::P1080, Some(5_000_000)))
-        .arg("-r")
-        .arg(OUTPUT_FPS)
-        .arg("-pix_fmt")
-        .arg("yuv420p")
-        .arg("-c:a")
-        .arg("aac")
-        .arg("-b:a")
-        .arg("192k")
-        .arg("-movflags")
-        .arg("+faststart")
-        .arg(&output_path);
-    let result = command
-        .output()
-        .await
-        .context("つなぎ目プレビューを作成できませんでした。")?;
-    let _ = fs::remove_dir_all(&working);
-    anyhow::ensure!(
-        result.status.success(),
-        "つなぎ目プレビューの作成に失敗しました: {}",
-        String::from_utf8_lossy(&result.stderr).trim()
-    );
-    Ok(output_path.to_string_lossy().into_owned())
 }
 
 pub fn cleanup_cache() {

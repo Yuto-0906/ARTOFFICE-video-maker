@@ -9,6 +9,8 @@ import {
   duplicateOrders,
   frameToSeconds,
   formatChapterTime,
+  isMp4Path,
+  isThumbnailImagePath,
   moveClipGroup,
   parseClock,
   parseVideoFileName,
@@ -18,6 +20,21 @@ import {
   sortClipsByOrder,
   validateProject,
 } from "./utils";
+
+describe("ドラッグ＆ドロップの対応形式", () => {
+  it("MP4の大文字・小文字を判定する", () => {
+    expect(isMp4Path(String.raw`C:\動画\1_バンド.MP4`)).toBe(true);
+    expect(isMp4Path(String.raw`C:\動画\1_バンド.mp4`)).toBe(true);
+    expect(isMp4Path(String.raw`C:\動画\1_バンド.mov`)).toBe(false);
+  });
+
+  it("サムネイル用画像の対応形式を判定する", () => {
+    ["jpg", "JPEG", "png", "HEIC", "heif"].forEach((extension) => {
+      expect(isThumbnailImagePath(`C:\\写真\\集合写真.${extension}`)).toBe(true);
+    });
+    expect(isThumbnailImagePath(String.raw`C:\写真\集合写真.webp`)).toBe(false);
+  });
+});
 
 describe("thumbnail crop", () => {
   it("2731×1536の画像を中央の16:9へ正規化する", () => {
@@ -173,7 +190,7 @@ describe("time entry", () => {
 });
 
 describe("project compatibility", () => {
-  it("v0.1.0～v0.2.1の保存データを読み込める", () => {
+  it("v0.1.0～v0.3.0の保存データを読み込める", () => {
     const base = {
       schemaVersion: 1,
       eventName: "8月ライブ",
@@ -185,5 +202,6 @@ describe("project compatibility", () => {
     expect(validateProject({ ...base, appVersion: "0.1.0" })).toBe(true);
     expect(validateProject({ ...base, appVersion: "0.2.0" })).toBe(true);
     expect(validateProject({ ...base, appVersion: "0.2.1" })).toBe(true);
+    expect(validateProject({ ...base, appVersion: "0.3.0" })).toBe(true);
   });
 });

@@ -60,7 +60,7 @@ export interface ThumbnailV1 {
 
 export interface ProjectV1 {
   schemaVersion: 1;
-  appVersion: "0.1.0" | "0.2.0" | "0.2.1";
+  appVersion: "0.1.0" | "0.2.0" | "0.2.1" | "0.3.0";
   eventName: string;
   clips: ClipV1[];
   outputResolution: Resolution;

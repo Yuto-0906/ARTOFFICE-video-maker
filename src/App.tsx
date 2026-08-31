@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -32,6 +32,8 @@ import {
   formatChapterTime,
   formatClock,
   frameToSeconds,
+  isMp4Path,
+  isThumbnailImagePath,
   parentFolderName,
   parseClock,
   parseVideoFileName,
@@ -47,7 +49,7 @@ type Step = "import" | "trim" | "thumbnail" | "export";
 
 const EMPTY_PROJECT: ProjectV1 = {
   schemaVersion: 1,
-  appVersion: "0.2.1",
+  appVersion: "0.3.0",
   eventName: "",
   clips: [],
   outputResolution: "1080p",
@@ -89,6 +91,7 @@ export default function App() {
   const [renderResult, setRenderResult] = useState<RenderFinished | null>(null);
   const [closeRequested, setCloseRequested] = useState(false);
   const [closing, setClosing] = useState(false);
+  const [fileDragActive, setFileDragActive] = useState(false);
 
   const selectedClip = project.clips.find((clip) => clip.id === selectedClipId) ?? project.clips[0] ?? null;
   const duplicateSet = useMemo(() => duplicateOrders(project.clips), [project.clips]);
@@ -428,17 +431,11 @@ export default function App() {
       : "この動画を別のバンドとして扱います。");
   }
 
-  async function chooseThumbnail() {
-    const selection = await open({
-      multiple: false,
-      directory: false,
-      filters: [{ name: "集合写真", extensions: ["jpg", "jpeg", "png", "heic", "heif", "JPG", "PNG", "HEIC"] }],
-    });
-    if (!selection || Array.isArray(selection)) return;
+  const loadThumbnailPath = useCallback(async (sourcePath: string) => {
     setBusy(true);
     setError(null);
     try {
-      const prepared = await invoke<PreparedThumbnail>("prepare_thumbnail", { sourcePath: selection });
+      const prepared = await invoke<PreparedThumbnail>("prepare_thumbnail", { sourcePath });
       const thumbnail: ThumbnailV1 = {
         ...prepared,
         crop: centeredCropForAspect(prepared.sourceWidth, prepared.sourceHeight),
@@ -451,7 +448,65 @@ export default function App() {
     } finally {
       setBusy(false);
     }
+  }, [updateProject]);
+
+  async function chooseThumbnail() {
+    const selection = await open({
+      multiple: false,
+      directory: false,
+      filters: [{ name: "集合写真", extensions: ["jpg", "jpeg", "png", "heic", "heif", "JPG", "PNG", "HEIC"] }],
+    });
+    if (!selection || Array.isArray(selection)) return;
+    await loadThumbnailPath(selection);
   }
+
+  const handleDroppedPaths = useCallback(async (paths: string[]) => {
+    setFileDragActive(false);
+    if (busy) {
+      setNotice("処理中のため，ファイルを追加できません。");
+      return;
+    }
+    if (step === "import") {
+      const videos = paths.filter(isMp4Path);
+      if (videos.length === 0) {
+        setError("MP4ファイルをドロップしてください。");
+        return;
+      }
+      await addVideoPaths(videos);
+      return;
+    }
+    if (step === "thumbnail") {
+      const images = paths.filter(isThumbnailImagePath);
+      if (images.length === 0) {
+        setError("JPG，PNG，HEIC，HEIFのいずれかをドロップしてください。");
+        return;
+      }
+      if (images.length > 1) {
+        setError("サムネイル画像は1枚だけドロップしてください。");
+        return;
+      }
+      await loadThumbnailPath(images[0]);
+    }
+  }, [addVideoPaths, busy, loadThumbnailPath, step]);
+
+  useEffect(() => {
+    setFileDragActive(false);
+    const unlisten = getCurrentWindow().onDragDropEvent(({ payload }) => {
+      if (payload.type === "enter") {
+        const acceptsDrop = step === "import"
+          ? payload.paths.some(isMp4Path)
+          : step === "thumbnail" && payload.paths.some(isThumbnailImagePath);
+        setFileDragActive(!busy && acceptsDrop);
+      } else if (payload.type === "leave") {
+        setFileDragActive(false);
+      } else if (payload.type === "drop") {
+        void handleDroppedPaths(payload.paths);
+      }
+    });
+    return () => {
+      void unlisten.then((remove) => remove());
+    };
+  }, [busy, handleDroppedPaths, step]);
 
   function updateThumbnailCrop(area: Area, zoom: number) {
     if (!project.thumbnail) return;
@@ -612,6 +667,15 @@ export default function App() {
         {notice && <div className="banner notice-banner"><span>{notice}</span><button onClick={() => setNotice(null)}>閉じる</button></div>}
         {error && <div className="banner error-banner"><pre>{error}</pre><button onClick={() => setError(null)}>閉じる</button></div>}
 
+        {fileDragActive && (
+          <div className="file-drop-overlay" role="status" aria-live="polite">
+            <div>
+              <span aria-hidden="true">↓</span>
+              <strong>{step === "import" ? "MP4をドロップして追加" : "画像をドロップして設定"}</strong>
+            </div>
+          </div>
+        )}
+
         {step === "import" && (
           <ImportStep
             project={project}
@@ -713,21 +777,50 @@ interface ImportStepProps {
 function ImportStep(props: ImportStepProps) {
   const hasMissing = props.project.clips.some((clip) => Boolean(clip.importError));
   const groups = clipGroups(props.project.clips);
+  const pointerDragIdRef = useRef<string | null>(null);
+  const [pointerDropTargetId, setPointerDropTargetId] = useState<string | null>(null);
   const positions = new Map<string, { groupIndex: number; partIndex: number; partCount: number }>();
   groups.forEach((group, groupIndex) => group.forEach((clip, partIndex) => {
     positions.set(clip.id, { groupIndex, partIndex, partCount: group.length });
   }));
 
-  function beginDrag(event: DragEvent<HTMLElement>, id: string) {
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", id);
+  function clipIdAt(clientX: number, clientY: number): string | null {
+    return document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>("[data-clip-id]")?.dataset.clipId ?? null;
+  }
+
+  function beginPointerDrag(event: ReactPointerEvent<HTMLElement>, id: string) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    pointerDragIdRef.current = id;
+    setPointerDropTargetId(id);
     props.onDragStart(id);
   }
 
-  function acceptDrop(event: DragEvent<HTMLElement>, targetId: string) {
-    event.preventDefault();
-    const sourceId = event.dataTransfer.getData("text/plain") || props.draggedClipId;
-    if (sourceId) props.onDrop(sourceId, targetId);
+  function movePointerDrag(event: ReactPointerEvent<HTMLElement>) {
+    if (!pointerDragIdRef.current) return;
+    setPointerDropTargetId(clipIdAt(event.clientX, event.clientY));
+  }
+
+  function endPointerDrag(event: ReactPointerEvent<HTMLElement>) {
+    const sourceId = pointerDragIdRef.current;
+    const targetId = clipIdAt(event.clientX, event.clientY);
+    pointerDragIdRef.current = null;
+    setPointerDropTargetId(null);
+    props.onDragStart(null);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    if (sourceId && targetId) props.onDrop(sourceId, targetId);
+  }
+
+  function cancelPointerDrag(event: ReactPointerEvent<HTMLElement>) {
+    pointerDragIdRef.current = null;
+    setPointerDropTargetId(null);
+    props.onDragStart(null);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
   }
 
   return (
@@ -749,6 +842,7 @@ function ImportStep(props: ImportStepProps) {
         <div className="empty-state">
           <div className="empty-icon">＋</div>
           <h2>ライブ動画を追加してください</h2>
+          <p>MP4をここへドラッグ＆ドロップ</p>
         </div>
       ) : (
         <div className="clip-table-wrap">
@@ -763,20 +857,17 @@ function ImportStep(props: ImportStepProps) {
               return (
               <div
                 key={clip.id}
-                className={`clip-row ${props.draggedClipId === clip.id ? "dragging" : ""} ${joined ? "continuation" : ""}`}
-                onDragOver={(event) => {
-                  event.preventDefault();
-                  event.dataTransfer.dropEffect = "move";
-                }}
-                onDrop={(event) => acceptDrop(event, clip.id)}
+                data-clip-id={clip.id}
+                className={`clip-row ${props.draggedClipId === clip.id ? "dragging" : ""} ${pointerDropTargetId === clip.id && props.draggedClipId !== clip.id ? "drop-target" : ""} ${joined ? "continuation" : ""}`}
               >
                 <span
                   className="drag-handle"
                   title="ドラッグして並べ替え"
-                  draggable
                   aria-label={`${clip.bandName}を並べ替え`}
-                  onDragStart={(event) => beginDrag(event, clip.id)}
-                  onDragEnd={() => props.onDragStart(null)}
+                  onPointerDown={(event) => beginPointerDrag(event, clip.id)}
+                  onPointerMove={movePointerDrag}
+                  onPointerUp={endPointerDrag}
+                  onPointerCancel={cancelPointerDrag}
                 >⠿</span>
                 <span className={`order-badge ${props.duplicateSet.has(clip.order) ? "warning" : ""}`} title={joined ? `パート${position.partIndex + 1}` : `出演順${clip.order}`}>
                   {joined ? "↳" : clip.order}
@@ -843,15 +934,11 @@ interface TrimStepProps {
 function TrimStep({ clips, selected, onSelect, onUpdate, onNext, onError }: TrimStepProps) {
   const playerRef = useRef<HTMLVideoElement>(null);
   const [currentTime, setCurrentTime] = useState(0);
-  const [transitionPreview, setTransitionPreview] = useState<string | null>(null);
-  const [previewBusy, setPreviewBusy] = useState(false);
   const fps = selected.media.fps;
   const inSeconds = frameToSeconds(selected.inFrame, fps);
   const outSeconds = frameToSeconds(selected.outFrameExclusive, fps);
   const titleTime = currentTime - inSeconds;
   const titleOpacity = selected.joinWithPrevious || titleTime < 0 || titleTime >= 5 ? 0 : titleTime < 0.5 ? titleTime / 0.5 : titleTime < 4.5 ? 1 : (5 - titleTime) / 0.5;
-  const nextIndex = clips.findIndex((clip) => clip.id === selected.id) + 1;
-  const nextClip = nextIndex > 0 && nextIndex < clips.length ? clips[nextIndex] : null;
   const groups = clipGroups(clips);
   const positions = new Map<string, { bandIndex: number; partIndex: number; partCount: number }>();
   groups.forEach((group, bandIndex) => group.forEach((clip, partIndex) => {
@@ -861,7 +948,6 @@ function TrimStep({ clips, selected, onSelect, onUpdate, onNext, onError }: Trim
 
   useEffect(() => {
     setCurrentTime(inSeconds);
-    setTransitionPreview(null);
     if (playerRef.current) playerRef.current.currentTime = inSeconds;
   }, [selected.id, inSeconds]);
 
@@ -879,21 +965,6 @@ function TrimStep({ clips, selected, onSelect, onUpdate, onNext, onError }: Trim
   function setOutFromCurrent() {
     const frame = Math.max(selected.inFrame + 1, secondsToFrame(currentTime, fps));
     onUpdate(selected.id, (clip) => ({ ...clip, outFrameExclusive: Math.min(frame, clip.media.frameCount) }));
-  }
-
-  async function renderTransitionPreview() {
-    if (!nextClip) return;
-    setPreviewBusy(true);
-    try {
-      const path = await invoke<string>("render_transition_preview", {
-        request: { current: selected, next: nextClip },
-      });
-      setTransitionPreview(convertFileSrc(path));
-    } catch (reason) {
-      onError(errorMessage(reason));
-    } finally {
-      setPreviewBusy(false);
-    }
   }
 
   return (
@@ -995,12 +1066,6 @@ function TrimStep({ clips, selected, onSelect, onUpdate, onNext, onError }: Trim
           </div>
         </div>
 
-        <div className="transition-preview-card">
-          <div><strong>{nextClip?.joinWithPrevious ? "分割動画の連結プレビュー" : "つなぎ目プレビュー"}</strong><small>{nextClip ? nextClip.joinWithPrevious ? `${selected.sourceFileName}の直後に${nextClip.sourceFileName}を連結` : `${selected.bandName} → ${nextClip.bandName}` : "最後の動画です"}</small></div>
-          {transitionPreview && <video src={transitionPreview} controls autoPlay />}
-          <button className="secondary" disabled={!nextClip || previewBusy} onClick={renderTransitionPreview}>{previewBusy ? "作成中…" : nextClip?.joinWithPrevious ? "連結部分を確認" : "0.5秒クロスフェードを確認"}</button>
-        </div>
-
         <div className="step-footer"><button className="primary" onClick={onNext}>サムネイルへ進む <span>→</span></button></div>
       </div>
     </section>
@@ -1060,7 +1125,7 @@ function ThumbnailStep({ thumbnail, busy, onChoose, onRemove, onCropComplete, on
 
       {!thumbnail ? (
         <div className="empty-state thumbnail-empty">
-          <div className="empty-icon photo">▧</div><p>JPG，PNG，HEIC，HEIFに対応します。選択しない場合，サムネイルは出力しません。</p>
+          <div className="empty-icon photo">▧</div><strong className="drop-prompt">画像をここへドラッグ＆ドロップ</strong><p>JPG，PNG，HEIC，HEIFに対応します。選択しない場合，サムネイルは出力しません。</p>
           <button className="secondary" onClick={onChoose} disabled={busy}>{busy ? "画像を処理中…" : "写真を選択"}</button>
         </div>
       ) : (
