@@ -1,0 +1,120 @@
+name: macOS build
+
+on:
+  workflow_call:
+    inputs:
+      sign:
+        type: boolean
+        default: false
+        required: false
+    secrets:
+      APPLE_CERTIFICATE:
+        required: false
+      APPLE_CERTIFICATE_PASSWORD:
+        required: false
+      APPLE_SIGNING_IDENTITY:
+        required: false
+      APPLE_ID:
+        required: false
+      APPLE_PASSWORD:
+        required: false
+      APPLE_TEAM_ID:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: macOS ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+            target: aarch64-apple-darwin
+            label: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+            target: x86_64-apple-darwin
+            label: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "15.0"
+      AOV_REQUIRE_TOOLS: "1"
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+      - uses: actions/cache@v6.1.0
+        with:
+          path: |
+            .tool-cache/macos-sources
+            .tool-cache/macos-runtime
+          key: macos15-runtime-${{ matrix.arch }}-${{ hashFiles('tools.macos.lock.json', 'tools.lock.json', 'scripts/build-macos-tools.py') }}
+      - name: Install build dependencies
+        run: |
+          npm ci
+          python -m pip install fonttools==4.63.0 meson==1.9.1 ninja==1.13.0
+      - name: Build pinned static runtime tools
+        run: python scripts/build-macos-tools.py --arch ${{ matrix.arch }}
+      - name: Check frontend and Rust
+        run: |
+          npm run build
+          npm test -- --run
+          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+          cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+          cargo test --locked --manifest-path src-tauri/Cargo.toml
+          cargo test --locked --manifest-path src-tauri/Cargo.toml ffmpeg_output_resolution_contract_test -- --ignored --nocapture
+      - name: Import Developer ID certificate
+        if: inputs.sign
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: python scripts/macos-signing.py prepare
+      - name: Package and verify signed DMG
+        if: inputs.sign
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: python scripts/package-macos.py --target ${{ matrix.target }} --signed
+      - name: Package and verify CI DMG
+        if: ${{ !inputs.sign }}
+        run: python scripts/package-macos.py --target ${{ matrix.target }}
+      - name: Package corresponding source
+        if: matrix.arch == 'arm64'
+        run: python scripts/build-macos-tools.py --sources-only
+      - name: Remove temporary signing material
+        if: always() && inputs.sign
+        run: python scripts/macos-signing.py cleanup
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: macos-${{ matrix.label }}-${{ inputs.sign && 'signed' || 'ci-unsigned' }}
+          path: |
+            artifacts/*.dmg
+            artifacts/*.sha256
+            artifacts/*macos-sources.tar.gz
+            artifacts/*verification.json
+          if-no-files-found: error
+          retention-days: 7

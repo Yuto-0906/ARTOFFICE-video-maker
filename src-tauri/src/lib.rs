@@ -1,3 +1,5 @@
+#[cfg(target_os = "macos")]
+mod macos_image;
 mod media;
 mod models;
 mod project;
@@ -14,6 +16,11 @@ use tauri::{AppHandle, Manager, State};
 
 fn command_error(error: anyhow::Error) -> String {
     format!("{error:#}")
+}
+
+/// Used by CI to exercise a relocated distribution without starting the WebView.
+pub fn verify_runtime(directory: &std::path::Path) -> anyhow::Result<()> {
+    tokio::runtime::Runtime::new()?.block_on(render::verify_packaged_runtime(directory))
 }
 
 #[tauri::command]
@@ -75,6 +82,7 @@ pub fn run() {
         .plugin(tauri_plugin_log::Builder::new().build())
         .manage(RenderState::default())
         .setup(|app| {
+            tools::initialize_resource_directory(app.path().resource_dir()?);
             thumbnail::cleanup_cache();
             render::cleanup_cache();
             let window = app

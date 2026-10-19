@@ -190,7 +190,7 @@ describe("time entry", () => {
 });
 
 describe("project compatibility", () => {
-  it("v0.1.0～v0.3.0の保存データを読み込める", () => {
+  it("v0.1.0～v0.4.0の保存データを読み込める", () => {
     const base = {
       schemaVersion: 1,
       eventName: "8月ライブ",
@@ -203,5 +203,6 @@ describe("project compatibility", () => {
     expect(validateProject({ ...base, appVersion: "0.2.0" })).toBe(true);
     expect(validateProject({ ...base, appVersion: "0.2.1" })).toBe(true);
     expect(validateProject({ ...base, appVersion: "0.3.0" })).toBe(true);
+    expect(validateProject({ ...base, appVersion: "0.4.0" })).toBe(true);
   });
 });
