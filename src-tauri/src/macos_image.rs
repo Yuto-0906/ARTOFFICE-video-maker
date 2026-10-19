@@ -254,6 +254,7 @@ mod tests {
             .block_on(crate::thumbnail::prepare(heic.to_str().unwrap()))
             .unwrap();
         assert_eq!((prepared.source_width, prepared.source_height), (96, 160));
+        assert_eq!(prepared.exif_orientation, 1);
         let thumbnail = crate::models::ThumbnailV1 {
             source_path: heic.to_string_lossy().into_owned(),
             preview_path: prepared.preview_path,
@@ -262,16 +263,22 @@ mod tests {
             exif_orientation: 1,
             zoom: 1.0,
             crop: crate::models::CropRectNormalized {
-                x: 0.0,
-                y: 0.0,
-                width: 1.0,
-                height: 1.0,
+                x: 0.6,
+                y: 0.05,
+                width: 0.3,
+                height: 0.3,
             },
         };
         let jpeg = temp.path().join("サムネイル.jpg");
         runtime
             .block_on(crate::thumbnail::export(&thumbnail, &jpeg))
             .unwrap();
-        assert_eq!(image::open(jpeg).unwrap().dimensions(), (1920, 1080));
+        let cropped = image::open(jpeg).unwrap();
+        assert_eq!(cropped.dimensions(), (1920, 1080));
+        // A crop inside the oriented top-right patch must contain only blue pixels.
+        for (x, y) in [(100, 100), (960, 540), (1820, 980)] {
+            let pixel = cropped.get_pixel(x, y);
+            assert!(i16::from(pixel[2]) > i16::from(pixel[0]) + 80);
+        }
     }
 }

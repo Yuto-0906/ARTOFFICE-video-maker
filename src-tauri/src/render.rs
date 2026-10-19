@@ -444,6 +444,13 @@ fn encoder_args(
         "h264_videotoolbox" => {
             push!("-allow_sw");
             push!("0");
+            push!("-fps_mode:v");
+            push!("cfr");
+            // VideoToolbox can omit packet durations, leaving MP4's final frame
+            // one track tick long. Keep every packet at the fixed output duration
+            // without changing PTS/DTS or the ordering of B-frames.
+            push!("-bsf:v");
+            push!("setts=pts=PTS:dts=DTS:duration=1001/(60000*TB)");
         }
         _ => {}
     }
@@ -1108,6 +1115,10 @@ pub(crate) async fn verify_packaged_runtime(directory: &Path) -> Result<()> {
             "Unexpected output codec"
         );
         anyhow::ensure!(
+            (metadata.fps.value() - 60000.0 / 1001.0).abs() < 0.001,
+            "Unexpected output frame rate"
+        );
+        anyhow::ensure!(
             (metadata.duration_seconds - total_duration(&clips)).abs() < 0.15,
             "Unexpected output duration"
         );
@@ -1410,6 +1421,7 @@ mod tests {
         let encoder = choose_encoder(&ffmpeg, &CancellationToken::new())
             .await
             .unwrap();
+        println!("encoder={}", encoder.label);
         let output = temp.path().join("smoke.mp4");
         let mut command = StdCommand::new(&ffmpeg);
         command.current_dir(temp.path());
@@ -1514,6 +1526,7 @@ mod tests {
             (Resolution::P1080, "contract-1080p"),
             (Resolution::P1440, "contract-1440p"),
         ] {
+            println!("encoder={}; resolution={stem}", encoder.label);
             let working = temp.path().join(stem);
             fs::create_dir_all(&working).unwrap();
             let graph =
@@ -1566,7 +1579,7 @@ mod tests {
                     "-v",
                     "error",
                     "-show_entries",
-                    "stream=codec_type,codec_name,profile,width,height,pix_fmt,avg_frame_rate,sample_rate,channels,color_space,color_transfer,color_primaries",
+                    "stream=codec_type,codec_name,profile,width,height,pix_fmt,avg_frame_rate,duration,nb_frames,sample_rate,channels,color_space,color_transfer,color_primaries",
                     "-of",
                     "json",
                 ])
@@ -1575,6 +1588,7 @@ mod tests {
                 .unwrap();
             assert!(probe.status.success());
             let metadata: serde_json::Value = serde_json::from_slice(&probe.stdout).unwrap();
+            println!("{stem}: {metadata}");
             let streams = metadata["streams"].as_array().unwrap();
             let video = streams
                 .iter()
@@ -1591,6 +1605,12 @@ mod tests {
             assert_eq!(video["height"], expected_height);
             assert_eq!(video["pix_fmt"], "yuv420p");
             assert_eq!(video["avg_frame_rate"], OUTPUT_FPS);
+            let frame_count: f64 = video["nb_frames"].as_str().unwrap().parse().unwrap();
+            let duration: f64 = video["duration"].as_str().unwrap().parse().unwrap();
+            assert!(
+                (duration - frame_count * 1001.0 / 60000.0).abs() < 0.0001,
+                "Frame durations must preserve the complete presentation timeline: {video}"
+            );
             assert_eq!(video["color_space"], "bt709");
             assert_eq!(video["color_transfer"], "bt709");
             assert_eq!(video["color_primaries"], "bt709");
@@ -1598,7 +1618,6 @@ mod tests {
             assert_eq!(audio["sample_rate"], "48000");
             assert_eq!(audio["channels"], 2);
         }
-        println!("encoder={}", encoder.label);
     }
 
     fn band_name_from_path(path: &Path) -> String {
