@@ -11,9 +11,10 @@ Set-StrictMode -Version Latest
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
 $directory = Join-Path $repoRoot ".macos-signing"
 $certificate = (Resolve-Path -LiteralPath $CertificatePath).Path
-$opensslCommand = Get-Command "openssl.exe" -ErrorAction SilentlyContinue
-$openssl = if ($null -ne $opensslCommand) { $opensslCommand.Source } else {
-    Join-Path $env:ProgramFiles "Git\usr\bin\openssl.exe"
+$nativeOpenSSL = Join-Path $env:ProgramFiles "Git\mingw64\bin\openssl.exe"
+$openssl = if (Test-Path -LiteralPath $nativeOpenSSL -PathType Leaf) { $nativeOpenSSL } else {
+    $opensslCommand = Get-Command "openssl.exe" -ErrorAction SilentlyContinue
+    if ($null -ne $opensslCommand) { $opensslCommand.Source } else { "" }
 }
 $gh = (Get-Command "gh.exe" -ErrorAction Stop).Source
 $key = Join-Path $directory "private-key.pem"

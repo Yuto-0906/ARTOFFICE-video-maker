@@ -7,9 +7,10 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
 $directory = Join-Path $repoRoot ".macos-signing"
-$opensslCommand = Get-Command "openssl.exe" -ErrorAction SilentlyContinue
-$openssl = if ($null -ne $opensslCommand) { $opensslCommand.Source } else {
-    Join-Path $env:ProgramFiles "Git\usr\bin\openssl.exe"
+$nativeOpenSSL = Join-Path $env:ProgramFiles "Git\mingw64\bin\openssl.exe"
+$openssl = if (Test-Path -LiteralPath $nativeOpenSSL -PathType Leaf) { $nativeOpenSSL } else {
+    $opensslCommand = Get-Command "openssl.exe" -ErrorAction SilentlyContinue
+    if ($null -ne $opensslCommand) { $opensslCommand.Source } else { "" }
 }
 if (-not (Test-Path -LiteralPath $openssl -PathType Leaf)) {
     throw "OpenSSL was not found. Install Git for Windows."
@@ -17,27 +18,38 @@ if (-not (Test-Path -LiteralPath $openssl -PathType Leaf)) {
 if ($CommonName -match '[/\r\n]') {
     throw "CommonName cannot contain slashes or newlines."
 }
-if (Test-Path -LiteralPath $directory) {
-    throw "Signing material already exists in .macos-signing. It will not be overwritten."
+if ((Test-Path -LiteralPath (Join-Path $directory "private-key.pem")) -or
+    (Test-Path -LiteralPath (Join-Path $directory "DeveloperID.certSigningRequest"))) {
+    throw "A signing key or CSR already exists in .macos-signing. It will not be overwritten."
 }
-New-Item -ItemType Directory -Path $directory | Out-Null
-$identity = [Security.Principal.WindowsIdentity]::GetCurrent().User
-$acl = Get-Acl -LiteralPath $directory
-$acl.SetAccessRuleProtection($true, $false)
-$rule = New-Object Security.AccessControl.FileSystemAccessRule(
-    $identity, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow"
-)
-$acl.AddAccessRule($rule)
-Set-Acl -LiteralPath $directory -AclObject $acl
+if (-not (Test-Path -LiteralPath $directory)) {
+    New-Item -ItemType Directory -Path $directory | Out-Null
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent().User
+    $acl = Get-Acl -LiteralPath $directory
+    $acl.SetAccessRuleProtection($true, $false)
+    $rule = New-Object Security.AccessControl.FileSystemAccessRule(
+        $identity, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow"
+    )
+    $acl.AddAccessRule($rule)
+    Set-Acl -LiteralPath $directory -AclObject $acl
+}
 
-$random = New-Object byte[] 32
-$generator = [Security.Cryptography.RandomNumberGenerator]::Create()
-$generator.GetBytes($random)
-$generator.Dispose()
-$password = [Convert]::ToBase64String($random)
-$securePassword = ConvertTo-SecureString -String $password -AsPlainText -Force
-$protectedPassword = ConvertFrom-SecureString -SecureString $securePassword
-Set-Content -LiteralPath (Join-Path $directory "key-password.dpapi") -Value $protectedPassword -NoNewline
+$passwordFile = Join-Path $directory "key-password.dpapi"
+if (Test-Path -LiteralPath $passwordFile) {
+    $securePassword = ConvertTo-SecureString -String (Get-Content -Raw -LiteralPath $passwordFile)
+    $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePassword)
+    try { $password = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer) }
+    finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer) }
+} else {
+    $random = New-Object byte[] 32
+    $generator = [Security.Cryptography.RandomNumberGenerator]::Create()
+    $generator.GetBytes($random)
+    $generator.Dispose()
+    $password = [Convert]::ToBase64String($random)
+    $securePassword = ConvertTo-SecureString -String $password -AsPlainText -Force
+    $protectedPassword = ConvertFrom-SecureString -SecureString $securePassword
+    Set-Content -LiteralPath $passwordFile -Value $protectedPassword -NoNewline
+}
 $key = Join-Path $directory "private-key.pem"
 $csr = Join-Path $directory "DeveloperID.certSigningRequest"
 try {

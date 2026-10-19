@@ -67,6 +67,22 @@ def extract(archive: Path, destination: Path) -> Path:
     return roots[0]
 
 
+def minimum_macos_versions(load_commands: str) -> list[tuple[int, ...]]:
+    minimums = []
+    command = ""
+    for line in load_commands.splitlines():
+        tokens = line.split()
+        if len(tokens) == 2 and tokens[0] == "cmd":
+            command = tokens[1]
+        elif len(tokens) == 2 and (
+            (command == "LC_BUILD_VERSION" and tokens[0] == "minos")
+            or (command == "LC_VERSION_MIN_MACOSX" and tokens[0] == "version")
+        ):
+            version = tuple(int(part) for part in tokens[1].split("."))
+            minimums.append(version + (0,) * max(0, 3 - len(version)))
+    return minimums
+
+
 def verify_binary(binary: Path, architecture: str) -> None:
     actual = subprocess.check_output(["lipo", "-archs", str(binary)], text=True).strip()
     if actual != architecture:
@@ -76,16 +92,8 @@ def verify_binary(binary: Path, architecture: str) -> None:
         dependency = line.strip().split(" (", 1)[0]
         if dependency and not dependency.startswith(("/usr/lib/", "/System/Library/")):
             raise ValueError(f"Non-system dylib dependency in {binary}: {dependency}")
-    commands = subprocess.check_output(["otool", "-l", str(binary)], text=True).splitlines()
-    minimums = []
-    for line in commands:
-        tokens = line.split()
-        if tokens and tokens[0] in ("minos", "version") and len(tokens) == 2:
-            # "version" is used by LC_VERSION_MIN_MACOSX on older toolchains.
-            try:
-                minimums.append(tuple(int(part) for part in tokens[1].split(".")))
-            except ValueError:
-                pass
+    commands = subprocess.check_output(["otool", "-l", str(binary)], text=True)
+    minimums = minimum_macos_versions(commands)
     if not minimums or any(value > (15, 0, 0) for value in minimums):
         raise ValueError(f"Unexpected minimum macOS version for {binary}: {minimums}")
 
