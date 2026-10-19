@@ -37,6 +37,13 @@ unsafe extern "C" {
     static kCFTypeDictionaryValueCallBacks: u8;
 }
 
+#[cfg(test)]
+#[link(name = "ImageIO", kind = "framework")]
+unsafe extern "C" {
+    fn CGImageSourceCreateImageAtIndex(source: Ref, index: usize, options: Ref) -> Ref;
+    static kCGImagePropertyOrientation: Ref;
+}
+
 #[link(name = "ImageIO", kind = "framework")]
 unsafe extern "C" {
     fn CGImageSourceCreateWithURL(url: Ref, options: Ref) -> Ref;
@@ -173,7 +180,35 @@ fn decode_inner(source_path: &Path, destination_path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use image::{GenericImageView, Rgb, RgbImage};
-    use std::process::Command;
+
+    fn write_oriented_heic(source_path: &Path, destination_path: &Path) -> Result<()> {
+        let source_url = file_url(source_path)?;
+        let destination_url = file_url(destination_path)?;
+        // SAFETY: Each created object is owned, and all pointers outlive the ImageIO calls.
+        unsafe {
+            let source = Owned::new(CGImageSourceCreateWithURL(source_url.0, ptr::null()))?;
+            let image = Owned::new(CGImageSourceCreateImageAtIndex(source.0, 0, ptr::null()))?;
+            let heic = Owned::new(CFStringCreateWithCString(
+                ptr::null(),
+                c"public.heic".as_ptr(),
+                0x0800_0100,
+            ))?;
+            let destination = Owned::new(CGImageDestinationCreateWithURL(
+                destination_url.0,
+                heic.0,
+                1,
+                ptr::null(),
+            ))?;
+            let orientation = number(6)?;
+            let properties = dictionary(&[kCGImagePropertyOrientation], &[orientation.0])?;
+            CGImageDestinationAddImage(destination.0, image.0, properties.0);
+            ensure!(
+                CGImageDestinationFinalize(destination.0),
+                "Could not encode the HEIC fixture"
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn decodes_full_size_and_rejects_invalid_data() {
@@ -204,28 +239,7 @@ mod tests {
         }
         pixels.save(&png).unwrap();
         let heic = temp.path().join("集合写真.heic");
-        let output = Command::new("/usr/bin/sips")
-            .args(["-s", "format", "heic"])
-            .arg(&png)
-            .arg("--out")
-            .arg(&heic)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let output = Command::new("/usr/bin/sips")
-            .args(["-s", "orientation", "6"])
-            .arg(&heic)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        write_oriented_heic(&png, &heic).unwrap();
         let destination = temp.path().join("oriented.png");
         decode_to_png(&heic, &destination).unwrap();
         let oriented = image::open(&destination).unwrap();

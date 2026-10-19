@@ -55,6 +55,8 @@ Mac本体やXcodeの画面操作は不要です。初回の本人ログイン・
 
 秘密鍵・パスワード・PKCS#12を，チャットやIssue，プルリクエスト，ログへ貼り付けないでください。登録後の確認はgh secret listで名前だけを確認します。
 
+公証用パスワードを後で入力する場合は，登録スクリプトへ-SigningOnlyを加えると，署名用の5項目だけを準備できます。APPLE_PASSWORDはGitHubのSettings → Secrets and variables → ActionsでNew repository secretを開き，利用者が直接登録することもできます。Apple Accountの作成済みアプリ用パスワードは文字列を再表示できないため，保存していなければ公証用を新しく1つ作成します。
+
 ## 署名・公証済みの下書きRelease
 
 Releaseワークフローをv0.4.0のタグpush，または手動実行で起動します。手動実行時のtag入力はpackage.jsonの版と一致させます。

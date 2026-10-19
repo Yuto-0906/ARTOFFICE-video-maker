@@ -128,7 +128,13 @@ def source_package() -> Path:
     with tarfile.open(archive, "w:gz") as output:
         for name, artifact in LOCK["sources"].items():
             output.add(fetch(artifact), arcname=f"sources/{artifact['fileName']}")
-        output.add(fetch(COMMON["notoSansJp"]), arcname=f"sources/{COMMON['notoSansJp']['fileName']}")
+        font = COMMON["notoSansJp"]
+        output.add(fetch(font), arcname=f"sources/{font['fileName']}")
+        font_license = fetch({
+            "fileName": font["licenseFileName"], "url": font["licenseUrl"],
+            "sha256": font["licenseSha256"],
+        })
+        output.add(font_license, arcname=f"sources/{font['licenseFileName']}")
         for name in ("tools.macos.lock.json", "tools.lock.json", "THIRD_PARTY_NOTICES.md",
                      "scripts/build-macos-tools.py", "docs/MAC_BUILD_AND_SIGNING.md"):
             output.add(ROOT / name, arcname=name)

@@ -25,7 +25,7 @@ Windows版のHEIC／HEIF画像のデコードに，HEIC delegateを内蔵したI
 
 ## Mac版のFFmpegと静的リンクしたライブラリ
 
-Mac版のFFmpeg・ffprobeは公式のFFmpeg 8.1.2からビルドします。libx264，FreeType，HarfBuzzを静的リンクし，Appleのシステムライブラリ以外に依存しない構成です。FFmpegのGPLv3，x264のGPL，FreeTypeのFTL，HarfBuzzのMITライセンス表示をアプリ内のlicensesへ同梱します。FreeTypeの一部の著作権は© 2006–2026 The FreeType Project（https://freetype.org/）に帰属し，同プロジェクトは権利を留保します。
+Mac版のFFmpeg・ffprobeは公式のFFmpeg 8.1.2からビルドします。libx264，FreeType，HarfBuzzを静的リンクし，Appleのシステムライブラリ以外に依存しない構成です。FFmpegのGPLv3，x264のGPL，FreeTypeのFTL，HarfBuzzのMITライセンス表示をアプリ内のlicensesへ同梱します。このソフトウェアの一部はFreeType Teamの成果に基づいています（https://freetype.org/）。
 
 対応ソースとビルド手順は，同じReleaseのmacos-sources.tar.gzに収録します。NASM・pkgconfはビルドのみに使用し，アプリへ同梱しません。
 

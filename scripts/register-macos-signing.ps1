@@ -3,7 +3,8 @@ param(
     [Parameter(Mandatory)][string]$CertificatePath,
     [Parameter(Mandatory)][string]$AppleId,
     [Parameter(Mandatory)][ValidatePattern("^[A-Z0-9]{10}$")][string]$TeamId,
-    [SecureString]$AppSpecificPassword
+    [SecureString]$AppSpecificPassword,
+    [switch]$SigningOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -64,7 +65,7 @@ function Set-RepositorySecret {
     Write-Host "Registered secret: $Name"
 }
 
-if ($null -eq $AppSpecificPassword) {
+if (-not $SigningOnly -and $null -eq $AppSpecificPassword) {
     $AppSpecificPassword = Read-Host "Apple account app-specific password (not your login password)" -AsSecureString
 }
 $secureKeyPassword = ConvertTo-SecureString -String (Get-Content -Raw -LiteralPath $passwordFile)
@@ -105,7 +106,9 @@ try {
     Set-RepositorySecret -Name "APPLE_SIGNING_IDENTITY" -Value $commonName
     Set-RepositorySecret -Name "APPLE_ID" -Value $AppleId
     Set-RepositorySecret -Name "APPLE_TEAM_ID" -Value $TeamId
-    Set-RepositorySecret -Name "APPLE_PASSWORD" -Value (Get-PlainText -SecureValue $AppSpecificPassword)
+    if (-not $SigningOnly) {
+        Set-RepositorySecret -Name "APPLE_PASSWORD" -Value (Get-PlainText -SecureValue $AppSpecificPassword)
+    }
 } finally {
     Remove-Item Env:AOV_PRIVATE_KEY_PASSWORD -ErrorAction SilentlyContinue
     Remove-Item Env:AOV_P12_PASSWORD -ErrorAction SilentlyContinue
@@ -113,4 +116,8 @@ try {
     $keyPublic = $null
     $certPublic = $null
 }
-Write-Host "Mac signing configuration is ready. The Release workflow can now create a signed draft."
+if ($SigningOnly) {
+    Write-Host "Signing secrets are ready. APPLE_PASSWORD is still required for notarization."
+} else {
+    Write-Host "Mac signing configuration is ready. The Release workflow can now create a signed draft."
+}

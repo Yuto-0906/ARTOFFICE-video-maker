@@ -1221,6 +1221,30 @@ mod tests {
     use crate::{media, project, tools};
     use tokio_util::sync::CancellationToken;
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn sleep_inhibitor_is_reaped_after_the_job_guard_is_dropped() {
+        let guard = super::SleepGuard::acquire();
+        let child_id = guard
+            .child
+            .as_ref()
+            .expect("caffeinate must start")
+            .id()
+            .to_string();
+        let is_alive = || {
+            StdCommand::new("/bin/kill")
+                .args(["-0", &child_id])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap()
+                .success()
+        };
+        assert!(is_alive());
+        drop(guard);
+        assert!(!is_alive());
+    }
+
     fn clip(name: &str, seconds: f64) -> ClipV1 {
         let fps = Rational {
             numerator: 60000,
