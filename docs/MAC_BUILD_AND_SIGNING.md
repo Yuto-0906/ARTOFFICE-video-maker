@@ -82,4 +82,6 @@ python scripts/build-macos-tools.py --arch x86_64
 
 CIはバックエンドの実際の書き出しとキャンセル，同梱物の独立性，署名・公証を確認します。画面操作，WKWebViewの動画プレビュー，実機でのVideoToolboxの画質・速度は別の確認です。docs/MAC_TEST_CHECKLIST.mdに結果を記録するまで，実機確認済みとは案内しません。
 
+VideoToolboxは小さい映像で利用可否を確認した後，実際の書き出し結果も検査します。書き出しが失敗した場合や，完成動画の解像度・フレームレートが固定仕様に合わない場合は，完成ファイルとして確定する前にlibx264で書き出し直します。Appleの公証チケット検証で一時的な通信切断が起きた場合は最大3回再試行します。検証に成功しなければ配布物を作成しません。
+
 参考：[TauriのMac署名・公証](https://v2.tauri.app/distribute/sign/macos/)，[AppleのDeveloper ID証明書](https://developer.apple.com/help/account/certificates/create-developer-id-certificates/)，[GitHub Actionsの料金](https://docs.github.com/en/billing/concepts/product-billing/github-actions)。

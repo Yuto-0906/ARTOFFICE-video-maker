@@ -450,7 +450,9 @@ fn encoder_args(
             // one track tick long. Keep every packet at the fixed output duration
             // without changing PTS/DTS or the ordering of B-frames.
             push!("-bsf:v");
-            push!("setts=pts=PTS:dts=DTS:duration=1001/(60000*TB)");
+            push!("setts=time_base=1/60000:prescale=1:pts=PTS:dts=DTS:duration=1001");
+            push!("-video_track_timescale");
+            push!("60000");
         }
         _ => {}
     }
@@ -895,7 +897,7 @@ async fn run_job(
         &font,
         &working,
     )?;
-    let completed = execute_ffmpeg(FfmpegExecution {
+    let execution_result = execute_ffmpeg(FfmpegExecution {
         app: app.as_ref(),
         job_id: &job_id,
         request: &request,
@@ -905,7 +907,65 @@ async fn run_job(
         output: &partial_video,
         cancellation: &cancellation,
     })
-    .await?;
+    .await;
+    #[cfg(target_os = "macos")]
+    let (completed, encoder) = if encoder.codec == "h264_videotoolbox" {
+        let valid_output = if matches!(execution_result, Ok(true)) {
+            let probe =
+                crate::media::probe_paths(vec![partial_video.to_string_lossy().into_owned()])
+                    .await
+                    .remove(0);
+            probe.media.is_some_and(|media| {
+                media.video_codec == "h264"
+                    && (media.width, media.height) == request.resolution.dimensions()
+                    && (media.fps.value() - 60000.0 / 1001.0).abs() < 0.001
+            })
+        } else {
+            false
+        };
+        if cancellation.is_cancelled() || matches!(execution_result, Ok(false)) {
+            (false, encoder)
+        } else if valid_output {
+            (true, encoder)
+        } else {
+            // A successful small encoder probe does not guarantee that the full
+            // resolution export works. Discard an invalid hardware result before
+            // retrying the complete job with the bundled CPU encoder.
+            let encoder = EncoderConfig {
+                codec: "libx264",
+                label: "CPU（libx264）",
+            };
+            emit_progress(
+                app.as_ref(),
+                RenderProgress {
+                    job_id: job_id.clone(),
+                    phase: "preparing".into(),
+                    progress: 0.0,
+                    elapsed_seconds: 0.0,
+                    eta_seconds: None,
+                    encoder: Some(encoder.label.into()),
+                    message: "VideoToolboxを利用できないため，CPUで書き出します。".into(),
+                },
+            );
+            let _ = fs::remove_file(&partial_video);
+            let completed = execute_ffmpeg(FfmpegExecution {
+                app: app.as_ref(),
+                job_id: &job_id,
+                request: &request,
+                encoder: &encoder,
+                ffmpeg: &ffmpeg,
+                graph: &graph,
+                output: &partial_video,
+                cancellation: &cancellation,
+            })
+            .await?;
+            (completed, encoder)
+        }
+    } else {
+        (execution_result?, encoder)
+    };
+    #[cfg(not(target_os = "macos"))]
+    let completed = execution_result?;
     if !completed {
         return Ok(RunOutcome::Cancelled {
             encoder: Some(encoder.label.to_string()),
@@ -1485,7 +1545,9 @@ mod tests {
         let Some(ffprobe) = tools::ffprobe() else {
             return;
         };
-        let Some(font) = tools::font() else { return };
+        if tools::font().is_none() {
+            return;
+        }
         let temp = tempfile::tempdir().unwrap();
         let mut clips = Vec::new();
         for (index, (color, frequency, name)) in [("red", 440, "バンドA"), ("blue", 660, "バンドB")]
@@ -1519,60 +1581,30 @@ mod tests {
             clips.push(value);
         }
 
-        let encoder = choose_encoder(&ffmpeg, &CancellationToken::new())
-            .await
-            .unwrap();
         for (resolution, stem) in [
             (Resolution::P1080, "contract-1080p"),
             (Resolution::P1440, "contract-1440p"),
         ] {
-            println!("encoder={}; resolution={stem}", encoder.label);
-            let working = temp.path().join(stem);
-            fs::create_dir_all(&working).unwrap();
-            let graph =
-                build_filter_graph(&clips, resolution, resolution.dimensions(), &font, &working)
-                    .unwrap();
-            let output = temp.path().join(format!("{stem}.mp4"));
-            let mut command = StdCommand::new(&ffmpeg);
-            command.current_dir(&working);
-            command.args(["-hide_banner", "-loglevel", "error", "-y"]);
-            for clip in &clips {
-                command.arg("-i").arg(&clip.source_path);
-            }
-            command
-                .arg("-filter_complex_script")
-                .arg(&graph)
-                .args(["-map", "[vout]", "-map", "[aout]", "-c:v", encoder.codec])
-                .args(encoder_args(&encoder, resolution, None))
-                .args([
-                    "-r",
-                    OUTPUT_FPS,
-                    "-pix_fmt",
-                    "yuv420p",
-                    "-color_primaries",
-                    "bt709",
-                    "-color_trc",
-                    "bt709",
-                    "-colorspace",
-                    "bt709",
-                    "-c:a",
-                    "aac",
-                    "-b:a",
-                    "384k",
-                    "-ar",
-                    "48000",
-                    "-ac",
-                    "2",
-                    "-movflags",
-                    "+faststart",
-                ])
-                .arg(&output);
-            let rendered = command.output().unwrap();
-            assert!(
-                rendered.status.success(),
-                "{}",
-                String::from_utf8_lossy(&rendered.stderr)
-            );
+            let outcome = super::run_job(
+                None,
+                uuid::Uuid::new_v4().to_string(),
+                crate::models::RenderRequest {
+                    event_name: stem.into(),
+                    output_directory: temp.path().to_string_lossy().into_owned(),
+                    resolution,
+                    clips: clips.clone(),
+                    thumbnail: None,
+                    overwrite: false,
+                },
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+            let super::RunOutcome::Completed { encoder, paths } = outcome else {
+                panic!("The render contract unexpectedly cancelled")
+            };
+            println!("encoder={encoder}; resolution={stem}");
+            let output = PathBuf::from(paths.video);
 
             let probe = StdCommand::new(&ffprobe)
                 .args([

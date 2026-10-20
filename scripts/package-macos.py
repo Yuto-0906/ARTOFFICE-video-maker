@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -34,6 +35,21 @@ def checked(args: list[str], env: dict | None = None) -> str:
     return result.stdout
 
 
+def apple_ticket_check(args: list[str]) -> str:
+    for attempt in range(4):
+        try:
+            return checked(args)
+        except RuntimeError as error:
+            transient = any(message in str(error).lower() for message in (
+                "network connection", "cloudkit", "timed out", "temporarily", "error 68",
+            ))
+            if not transient or attempt == 3:
+                raise
+            print(f"Apple ticket service connection failed; retry {attempt + 1}/3", flush=True)
+            time.sleep(2 ** attempt)
+    raise AssertionError("unreachable")
+
+
 def notarize_dmg(dmg: Path) -> None:
     checked(["codesign", "--force", "--sign", os.environ["APPLE_SIGNING_IDENTITY"],
              "--timestamp", str(dmg)])
@@ -45,8 +61,8 @@ def notarize_dmg(dmg: Path) -> None:
     response = json.loads(result)
     if response.get("status") != "Accepted":
         raise RuntimeError(f"DMG notarization failed: {response.get('status')} ({response.get('id')})")
-    checked(["xcrun", "stapler", "staple", str(dmg)])
-    checked(["xcrun", "stapler", "validate", str(dmg)])
+    apple_ticket_check(["xcrun", "stapler", "staple", str(dmg)])
+    apple_ticket_check(["xcrun", "stapler", "validate", str(dmg)])
     checked(["spctl", "--assess", "--type", "open", "--context", "context:primary-signature", str(dmg)])
 
 
@@ -78,7 +94,7 @@ def main() -> None:
             tools.verify_binary(executable, architecture)
     checked(["codesign", "--verify", "--deep", "--strict", "--verbose=2", str(application)])
     if options.signed:
-        checked(["xcrun", "stapler", "validate", str(application)])
+        apple_ticket_check(["xcrun", "stapler", "validate", str(application)])
         checked(["spctl", "--assess", "--type", "execute", str(application)])
         notarize_dmg(dmg)
     with tempfile.TemporaryDirectory(prefix="ARTOFFICE 移動後 ") as temporary:
