@@ -127,7 +127,8 @@ jobs:
                   raise SystemExit(f"Checksum mismatch: {path.name}")
           for label in ("arm64", "x64"):
               report = json.loads((root / f"macos-{label}-verification.json").read_text())
-              if report["status"] != "passed" or not report["signedAndNotarized"]:
+              if (report["status"] != "passed" or not report["signedAndNotarized"]
+                      or not report.get("dmgContentsVerified")):
                   raise SystemExit(f"Mac verification failed: {label}")
           PY
       - uses: softprops/action-gh-release@v2
