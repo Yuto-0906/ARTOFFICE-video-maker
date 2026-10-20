@@ -1585,26 +1585,90 @@ mod tests {
             (Resolution::P1080, "contract-1080p"),
             (Resolution::P1440, "contract-1440p"),
         ] {
-            let outcome = super::run_job(
-                None,
-                uuid::Uuid::new_v4().to_string(),
-                crate::models::RenderRequest {
-                    event_name: stem.into(),
-                    output_directory: temp.path().to_string_lossy().into_owned(),
-                    resolution,
-                    clips: clips.clone(),
-                    thumbnail: None,
-                    overwrite: false,
-                },
-                CancellationToken::new(),
-            )
-            .await
-            .unwrap();
-            let super::RunOutcome::Completed { encoder, paths } = outcome else {
-                panic!("The render contract unexpectedly cancelled")
+            #[cfg(target_os = "macos")]
+            let output = {
+                let outcome = super::run_job(
+                    None,
+                    uuid::Uuid::new_v4().to_string(),
+                    crate::models::RenderRequest {
+                        event_name: stem.into(),
+                        output_directory: temp.path().to_string_lossy().into_owned(),
+                        resolution,
+                        clips: clips.clone(),
+                        thumbnail: None,
+                        overwrite: false,
+                    },
+                    CancellationToken::new(),
+                )
+                .await
+                .unwrap();
+                let super::RunOutcome::Completed { encoder, paths } = outcome else {
+                    panic!("The render contract unexpectedly cancelled")
+                };
+                println!("encoder={encoder}; resolution={stem}");
+                PathBuf::from(paths.video)
             };
-            println!("encoder={encoder}; resolution={stem}");
-            let output = PathBuf::from(paths.video);
+            // Keep the Windows contract independent of the Tauri GUI runtime.
+            #[cfg(not(target_os = "macos"))]
+            let output = {
+                let encoder = choose_encoder(&ffmpeg, &CancellationToken::new())
+                    .await
+                    .unwrap();
+                println!("encoder={}; resolution={stem}", encoder.label);
+                let working = temp.path().join(stem);
+                fs::create_dir_all(&working).unwrap();
+                let graph = build_filter_graph(
+                    &clips,
+                    resolution,
+                    resolution.dimensions(),
+                    &tools::font().unwrap(),
+                    &working,
+                )
+                .unwrap();
+                let output = temp.path().join(format!("{stem}.mp4"));
+                let mut command = StdCommand::new(&ffmpeg);
+                command.current_dir(&working);
+                command.args(["-hide_banner", "-loglevel", "error", "-y"]);
+                for clip in &clips {
+                    command.arg("-i").arg(&clip.source_path);
+                }
+                let rendered = command
+                    .arg("-filter_complex_script")
+                    .arg(graph)
+                    .args(["-map", "[vout]", "-map", "[aout]", "-c:v", encoder.codec])
+                    .args(encoder_args(&encoder, resolution, None))
+                    .args([
+                        "-r",
+                        OUTPUT_FPS,
+                        "-pix_fmt",
+                        "yuv420p",
+                        "-color_primaries",
+                        "bt709",
+                        "-color_trc",
+                        "bt709",
+                        "-colorspace",
+                        "bt709",
+                        "-c:a",
+                        "aac",
+                        "-b:a",
+                        "384k",
+                        "-ar",
+                        "48000",
+                        "-ac",
+                        "2",
+                        "-movflags",
+                        "+faststart",
+                    ])
+                    .arg(&output)
+                    .output()
+                    .unwrap();
+                assert!(
+                    rendered.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&rendered.stderr)
+                );
+                output
+            };
 
             let probe = StdCommand::new(&ffprobe)
                 .args([
