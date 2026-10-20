@@ -72,7 +72,10 @@ impl Drop for RenderArtifactsGuard {
     }
 }
 
-struct SleepGuard;
+struct SleepGuard {
+    #[cfg(target_os = "macos")]
+    child: Option<std::process::Child>,
+}
 
 impl SleepGuard {
     fn acquire() -> Self {
@@ -83,12 +86,26 @@ impl SleepGuard {
             };
             SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED);
         }
-        Self
+        Self {
+            #[cfg(target_os = "macos")]
+            child: std::process::Command::new("/usr/bin/caffeinate")
+                .args(["-i", "-w", &std::process::id().to_string()])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .ok(),
+        }
     }
 }
 
 impl Drop for SleepGuard {
     fn drop(&mut self) {
+        #[cfg(target_os = "macos")]
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
         #[cfg(windows)]
         unsafe {
             use windows_sys::Win32::System::Power::{SetThreadExecutionState, ES_CONTINUOUS};
@@ -261,7 +278,7 @@ fn partial_path(path: &Path) -> PathBuf {
 
 fn working_directory(job_id: &str) -> Result<PathBuf> {
     let directory = dirs::cache_dir()
-        .context("Windowsのキャッシュフォルダーが見つかりません。")?
+        .context("キャッシュフォルダーが見つかりません。")?
         .join("ARTOFFICE-video-maker")
         .join(format!("render-{job_id}"));
     fs::create_dir_all(&directory).context("書き出し用キャッシュを作成できませんでした。")?;
@@ -424,6 +441,19 @@ fn encoder_args(
             push!("-sc_threshold");
             push!("0");
         }
+        "h264_videotoolbox" => {
+            push!("-allow_sw");
+            push!("0");
+            push!("-fps_mode:v");
+            push!("cfr");
+            // VideoToolbox can omit packet durations, leaving MP4's final frame
+            // one track tick long. Keep every packet at the fixed output duration
+            // without changing PTS/DTS or the ordering of B-frames.
+            push!("-bsf:v");
+            push!("setts=time_base=1/60000:prescale=1:pts=PTS:dts=DTS:duration=1001");
+            push!("-video_track_timescale");
+            push!("60000");
+        }
         _ => {}
     }
     push!("-b:v");
@@ -474,6 +504,18 @@ async fn encoder_available(ffmpeg: &Path, config: &EncoderConfig) -> bool {
 }
 
 async fn choose_encoder(ffmpeg: &Path, cancellation: &CancellationToken) -> Result<EncoderConfig> {
+    #[cfg(target_os = "macos")]
+    let candidates = [
+        EncoderConfig {
+            codec: "h264_videotoolbox",
+            label: "Apple VideoToolbox",
+        },
+        EncoderConfig {
+            codec: "libx264",
+            label: "CPU（libx264）",
+        },
+    ];
+    #[cfg(not(target_os = "macos"))]
     let candidates = [
         EncoderConfig {
             codec: "h264_nvenc",
@@ -529,12 +571,14 @@ fn chapter_text(clips: &[ClipV1]) -> String {
     format!("{}\r\n", rows.join("\r\n"))
 }
 
-fn emit_progress(app: &AppHandle, payload: RenderProgress) {
-    let _ = app.emit("render-progress", payload);
+fn emit_progress(app: Option<&AppHandle>, payload: RenderProgress) {
+    if let Some(app) = app {
+        let _ = app.emit("render-progress", payload);
+    }
 }
 
 struct FfmpegExecution<'a> {
-    app: &'a AppHandle,
+    app: Option<&'a AppHandle>,
     job_id: &'a str,
     request: &'a RenderRequest,
     encoder: &'a EncoderConfig,
@@ -767,7 +811,7 @@ fn commit_outputs(outputs: &[(&Path, &Path)], job_id: &str) -> Result<()> {
 }
 
 async fn run_job(
-    app: AppHandle,
+    app: Option<AppHandle>,
     job_id: String,
     request: RenderRequest,
     cancellation: CancellationToken,
@@ -799,7 +843,7 @@ async fn run_job(
     }
 
     emit_progress(
-        &app,
+        app.as_ref(),
         RenderProgress {
             job_id: job_id.clone(),
             phase: "preparing".to_string(),
@@ -827,7 +871,7 @@ async fn run_job(
         .context("チャプターテキストを作成できませんでした。")?;
     if let (Some(model), Some(destination)) = (&request.thumbnail, &partial_thumbnail) {
         emit_progress(
-            &app,
+            app.as_ref(),
             RenderProgress {
                 job_id: job_id.clone(),
                 phase: "preparing".to_string(),
@@ -853,8 +897,8 @@ async fn run_job(
         &font,
         &working,
     )?;
-    let completed = execute_ffmpeg(FfmpegExecution {
-        app: &app,
+    let execution_result = execute_ffmpeg(FfmpegExecution {
+        app: app.as_ref(),
         job_id: &job_id,
         request: &request,
         encoder: &encoder,
@@ -863,7 +907,65 @@ async fn run_job(
         output: &partial_video,
         cancellation: &cancellation,
     })
-    .await?;
+    .await;
+    #[cfg(target_os = "macos")]
+    let (completed, encoder) = if encoder.codec == "h264_videotoolbox" {
+        let valid_output = if matches!(execution_result, Ok(true)) {
+            let probe =
+                crate::media::probe_paths(vec![partial_video.to_string_lossy().into_owned()])
+                    .await
+                    .remove(0);
+            probe.media.is_some_and(|media| {
+                media.video_codec == "h264"
+                    && (media.width, media.height) == request.resolution.dimensions()
+                    && (media.fps.value() - 60000.0 / 1001.0).abs() < 0.001
+            })
+        } else {
+            false
+        };
+        if cancellation.is_cancelled() || matches!(execution_result, Ok(false)) {
+            (false, encoder)
+        } else if valid_output {
+            (true, encoder)
+        } else {
+            // A successful small encoder probe does not guarantee that the full
+            // resolution export works. Discard an invalid hardware result before
+            // retrying the complete job with the bundled CPU encoder.
+            let encoder = EncoderConfig {
+                codec: "libx264",
+                label: "CPU（libx264）",
+            };
+            emit_progress(
+                app.as_ref(),
+                RenderProgress {
+                    job_id: job_id.clone(),
+                    phase: "preparing".into(),
+                    progress: 0.0,
+                    elapsed_seconds: 0.0,
+                    eta_seconds: None,
+                    encoder: Some(encoder.label.into()),
+                    message: "VideoToolboxを利用できないため，CPUで書き出します。".into(),
+                },
+            );
+            let _ = fs::remove_file(&partial_video);
+            let completed = execute_ffmpeg(FfmpegExecution {
+                app: app.as_ref(),
+                job_id: &job_id,
+                request: &request,
+                encoder: &encoder,
+                ffmpeg: &ffmpeg,
+                graph: &graph,
+                output: &partial_video,
+                cancellation: &cancellation,
+            })
+            .await?;
+            (completed, encoder)
+        }
+    } else {
+        (execution_result?, encoder)
+    };
+    #[cfg(not(target_os = "macos"))]
+    let completed = execution_result?;
     if !completed {
         return Ok(RunOutcome::Cancelled {
             encoder: Some(encoder.label.to_string()),
@@ -900,7 +1002,7 @@ pub async fn start(
     let result_id = job_id.clone();
     let state_for_task = state.clone();
     tauri::async_runtime::spawn(async move {
-        let result = run_job(app.clone(), result_id.clone(), request, cancellation).await;
+        let result = run_job(Some(app.clone()), result_id.clone(), request, cancellation).await;
         let payload = match result {
             Ok(RunOutcome::Completed { encoder, paths }) => RenderFinished {
                 job_id: result_id.clone(),
@@ -944,6 +1046,236 @@ pub fn cleanup_cache() {
     }
 }
 
+/// Exercise the actual job, cancellation and output transaction code in a packaged app.
+pub(crate) async fn verify_packaged_runtime(directory: &Path) -> Result<()> {
+    use crate::{
+        media,
+        models::{CropRectNormalized, ThumbnailV1},
+    };
+    use image::{Rgb, RgbImage};
+
+    fs::create_dir_all(directory)?;
+    let directory = fs::canonicalize(directory)?;
+    let ffmpeg = tools::ffmpeg().context("Bundled FFmpeg is required")?;
+    let ffprobe = tools::ffprobe().context("Bundled ffprobe is required")?;
+    let font = tools::font().context("Bundled Noto Sans JP Black is required")?;
+    let mut sources = Vec::new();
+    for (index, color) in ["red", "green", "blue"].into_iter().enumerate() {
+        let source = directory.join(format!("{}_日本語 バンド.mp4", index + 1));
+        let output = Command::new(&ffmpeg)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+            ])
+            .arg(format!("color=c={color}:s=640x360:r={OUTPUT_FPS}:d=2"))
+            .args([
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=48000:duration=2",
+                "-shortest",
+                "-c:v",
+                "mpeg4",
+                "-q:v",
+                "5",
+                "-c:a",
+                "aac",
+                "-ac",
+                "2",
+            ])
+            .arg(&source)
+            .output()
+            .await?;
+        anyhow::ensure!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        sources.push(source.to_string_lossy().into_owned());
+    }
+    let mut clips = Vec::new();
+    for (index, probe) in media::probe_paths(sources).await.into_iter().enumerate() {
+        anyhow::ensure!(
+            probe.error.is_none(),
+            "Media probe failed: {:?}",
+            probe.error
+        );
+        clips.push(ClipV1 {
+            id: Uuid::new_v4().to_string(),
+            source_path: probe.path,
+            source_file_name: probe.file_name,
+            fingerprint: probe.fingerprint,
+            order: (index + 1) as u32,
+            band_name: if index < 2 {
+                "日本語バンド"
+            } else {
+                "次のバンド"
+            }
+            .to_string(),
+            in_frame: 15,
+            out_frame_exclusive: 75,
+            media: probe.media.context("Missing media metadata")?,
+            join_with_previous: index == 1,
+            import_error: None,
+        });
+    }
+    let source_image = directory.join("集合 写真.png");
+    RgbImage::from_pixel(960, 540, Rgb([230, 30, 40])).save(&source_image)?;
+    let prepared = thumbnail::prepare(&source_image.to_string_lossy()).await?;
+    let thumbnail = ThumbnailV1 {
+        source_path: prepared.source_path,
+        preview_path: prepared.preview_path,
+        source_width: prepared.source_width,
+        source_height: prepared.source_height,
+        exif_orientation: 1,
+        zoom: 1.0,
+        crop: CropRectNormalized {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        },
+    };
+    let mut encoders = Vec::new();
+    for (resolution, name) in [(Resolution::P1080, "1080p"), (Resolution::P1440, "1440p")] {
+        let request = RenderRequest {
+            event_name: format!("移動後の確認 {name}"),
+            output_directory: directory.to_string_lossy().into_owned(),
+            resolution,
+            clips: clips.clone(),
+            thumbnail: Some(thumbnail.clone()),
+            overwrite: false,
+        };
+        let outcome = run_job(
+            None,
+            Uuid::new_v4().to_string(),
+            request.clone(),
+            CancellationToken::new(),
+        )
+        .await?;
+        let RunOutcome::Completed { encoder, paths } = outcome else {
+            anyhow::bail!("Runtime verification unexpectedly cancelled")
+        };
+        encoders.push(encoder);
+        let probe = media::probe_paths(vec![paths.video.clone()])
+            .await
+            .remove(0);
+        let metadata = probe.media.context("Rendered video could not be probed")?;
+        anyhow::ensure!(
+            (metadata.width, metadata.height) == resolution.dimensions(),
+            "Unexpected output dimensions"
+        );
+        anyhow::ensure!(
+            metadata.video_codec == "h264" && metadata.audio_codec.as_deref() == Some("aac"),
+            "Unexpected output codec"
+        );
+        anyhow::ensure!(
+            (metadata.fps.value() - 60000.0 / 1001.0).abs() < 0.001,
+            "Unexpected output frame rate"
+        );
+        anyhow::ensure!(
+            (metadata.duration_seconds - total_duration(&clips)).abs() < 0.15,
+            "Unexpected output duration"
+        );
+        let chapters = fs::read_to_string(paths.chapters)?;
+        anyhow::ensure!(
+            chapters.lines().count() == 2
+                && chapters.contains("日本語バンド")
+                && chapters.contains("次のバンド"),
+            "Unexpected chapters"
+        );
+        let image = image::open(paths.thumbnail.context("Missing thumbnail")?)?;
+        anyhow::ensure!(
+            image.width() == 1920 && image.height() == 1080,
+            "Unexpected thumbnail"
+        );
+
+        let token = CancellationToken::new();
+        token.cancel();
+        let cancel_id = Uuid::new_v4().to_string();
+        let cancelled = run_job(
+            None,
+            cancel_id.clone(),
+            RenderRequest {
+                event_name: format!("cancel-{name}"),
+                ..request.clone()
+            },
+            token,
+        )
+        .await?;
+        anyhow::ensure!(
+            matches!(cancelled, RunOutcome::Cancelled { .. }),
+            "Cancellation failed"
+        );
+        let cancelled_paths = output_paths_for(&RenderRequest {
+            event_name: format!("cancel-{name}"),
+            ..request.clone()
+        })?;
+        anyhow::ensure!(
+            !Path::new(&cancelled_paths.video).exists()
+                && !partial_path(Path::new(&cancelled_paths.video)).exists(),
+            "Cancelled output was left behind"
+        );
+        let cache = dirs::cache_dir()
+            .context("Missing cache directory")?
+            .join("ARTOFFICE-video-maker");
+        anyhow::ensure!(
+            !cache.join(format!("render-{cancel_id}")).exists(),
+            "Cancelled cache was left behind"
+        );
+    }
+    // Cancel a running FFmpeg child, rather than only cancelling encoder selection.
+    let working = directory.join("cancel-working");
+    fs::create_dir_all(&working)?;
+    let graph = build_filter_graph(&clips, Resolution::P1440, (2560, 1440), &font, &working)?;
+    let request = RenderRequest {
+        event_name: "cancel-process".into(),
+        output_directory: directory.to_string_lossy().into_owned(),
+        resolution: Resolution::P1440,
+        clips,
+        thumbnail: None,
+        overwrite: false,
+    };
+    let output = directory.join("cancel-process.partial.mp4");
+    let token = CancellationToken::new();
+    let cancellation = token.clone();
+    let task = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        cancellation.cancel();
+    });
+    let completed = execute_ffmpeg(FfmpegExecution {
+        app: None,
+        job_id: "runtime-cancel",
+        request: &request,
+        encoder: &EncoderConfig {
+            codec: "libx264",
+            label: "CPU（libx264）",
+        },
+        ffmpeg: &ffmpeg,
+        graph: &graph,
+        output: &output,
+        cancellation: &token,
+    })
+    .await?;
+    task.await?;
+    anyhow::ensure!(!completed, "Running FFmpeg did not cancel");
+    let _ = fs::remove_file(output);
+    println!(
+        "{}",
+        serde_json::json!({
+            "status": "passed", "ffmpeg": ffmpeg, "ffprobe": ffprobe, "font": font,
+            "encoders": encoders, "resolutions": ["1080p", "1440p"],
+            "joinedClips": true, "japaneseTitles": true, "thumbnail": true, "cancellation": true
+        })
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -959,6 +1291,30 @@ mod tests {
     use crate::models::{ClipV1, MediaInfo, ProjectV1, Rational, Resolution, SourceFingerprint};
     use crate::{media, project, tools};
     use tokio_util::sync::CancellationToken;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn sleep_inhibitor_is_reaped_after_the_job_guard_is_dropped() {
+        let guard = super::SleepGuard::acquire();
+        let child_id = guard
+            .child
+            .as_ref()
+            .expect("caffeinate must start")
+            .id()
+            .to_string();
+        let is_alive = || {
+            StdCommand::new("/bin/kill")
+                .args(["-0", &child_id])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap()
+                .success()
+        };
+        assert!(is_alive());
+        drop(guard);
+        assert!(!is_alive());
+    }
 
     fn clip(name: &str, seconds: f64) -> ClipV1 {
         let fps = Rational {
@@ -1125,6 +1481,7 @@ mod tests {
         let encoder = choose_encoder(&ffmpeg, &CancellationToken::new())
             .await
             .unwrap();
+        println!("encoder={}", encoder.label);
         let output = temp.path().join("smoke.mp4");
         let mut command = StdCommand::new(&ffmpeg);
         command.current_dir(temp.path());
@@ -1188,7 +1545,9 @@ mod tests {
         let Some(ffprobe) = tools::ffprobe() else {
             return;
         };
-        let Some(font) = tools::font() else { return };
+        if tools::font().is_none() {
+            return;
+        }
         let temp = tempfile::tempdir().unwrap();
         let mut clips = Vec::new();
         for (index, (color, frequency, name)) in [("red", 440, "バンドA"), ("blue", 660, "バンドB")]
@@ -1222,66 +1581,101 @@ mod tests {
             clips.push(value);
         }
 
-        let encoder = choose_encoder(&ffmpeg, &CancellationToken::new())
-            .await
-            .unwrap();
         for (resolution, stem) in [
             (Resolution::P1080, "contract-1080p"),
             (Resolution::P1440, "contract-1440p"),
         ] {
-            let working = temp.path().join(stem);
-            fs::create_dir_all(&working).unwrap();
-            let graph =
-                build_filter_graph(&clips, resolution, resolution.dimensions(), &font, &working)
+            #[cfg(target_os = "macos")]
+            let output = {
+                let outcome = super::run_job(
+                    None,
+                    uuid::Uuid::new_v4().to_string(),
+                    crate::models::RenderRequest {
+                        event_name: stem.into(),
+                        output_directory: temp.path().to_string_lossy().into_owned(),
+                        resolution,
+                        clips: clips.clone(),
+                        thumbnail: None,
+                        overwrite: false,
+                    },
+                    CancellationToken::new(),
+                )
+                .await
+                .unwrap();
+                let super::RunOutcome::Completed { encoder, paths } = outcome else {
+                    panic!("The render contract unexpectedly cancelled")
+                };
+                println!("encoder={encoder}; resolution={stem}");
+                PathBuf::from(paths.video)
+            };
+            // Keep the Windows contract independent of the Tauri GUI runtime.
+            #[cfg(not(target_os = "macos"))]
+            let output = {
+                let encoder = choose_encoder(&ffmpeg, &CancellationToken::new())
+                    .await
                     .unwrap();
-            let output = temp.path().join(format!("{stem}.mp4"));
-            let mut command = StdCommand::new(&ffmpeg);
-            command.current_dir(&working);
-            command.args(["-hide_banner", "-loglevel", "error", "-y"]);
-            for clip in &clips {
-                command.arg("-i").arg(&clip.source_path);
-            }
-            command
-                .arg("-filter_complex_script")
-                .arg(&graph)
-                .args(["-map", "[vout]", "-map", "[aout]", "-c:v", encoder.codec])
-                .args(encoder_args(&encoder, resolution, None))
-                .args([
-                    "-r",
-                    OUTPUT_FPS,
-                    "-pix_fmt",
-                    "yuv420p",
-                    "-color_primaries",
-                    "bt709",
-                    "-color_trc",
-                    "bt709",
-                    "-colorspace",
-                    "bt709",
-                    "-c:a",
-                    "aac",
-                    "-b:a",
-                    "384k",
-                    "-ar",
-                    "48000",
-                    "-ac",
-                    "2",
-                    "-movflags",
-                    "+faststart",
-                ])
-                .arg(&output);
-            let rendered = command.output().unwrap();
-            assert!(
-                rendered.status.success(),
-                "{}",
-                String::from_utf8_lossy(&rendered.stderr)
-            );
+                println!("encoder={}; resolution={stem}", encoder.label);
+                let working = temp.path().join(stem);
+                fs::create_dir_all(&working).unwrap();
+                let graph = build_filter_graph(
+                    &clips,
+                    resolution,
+                    resolution.dimensions(),
+                    &tools::font().unwrap(),
+                    &working,
+                )
+                .unwrap();
+                let output = temp.path().join(format!("{stem}.mp4"));
+                let mut command = StdCommand::new(&ffmpeg);
+                command.current_dir(&working);
+                command.args(["-hide_banner", "-loglevel", "error", "-y"]);
+                for clip in &clips {
+                    command.arg("-i").arg(&clip.source_path);
+                }
+                let rendered = command
+                    .arg("-filter_complex_script")
+                    .arg(graph)
+                    .args(["-map", "[vout]", "-map", "[aout]", "-c:v", encoder.codec])
+                    .args(encoder_args(&encoder, resolution, None))
+                    .args([
+                        "-r",
+                        OUTPUT_FPS,
+                        "-pix_fmt",
+                        "yuv420p",
+                        "-color_primaries",
+                        "bt709",
+                        "-color_trc",
+                        "bt709",
+                        "-colorspace",
+                        "bt709",
+                        "-c:a",
+                        "aac",
+                        "-b:a",
+                        "384k",
+                        "-ar",
+                        "48000",
+                        "-ac",
+                        "2",
+                        "-movflags",
+                        "+faststart",
+                    ])
+                    .arg(&output)
+                    .output()
+                    .unwrap();
+                assert!(
+                    rendered.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&rendered.stderr)
+                );
+                output
+            };
 
             let probe = StdCommand::new(&ffprobe)
                 .args([
                     "-v",
                     "error",
                     "-show_entries",
-                    "stream=codec_type,codec_name,profile,width,height,pix_fmt,avg_frame_rate,sample_rate,channels,color_space,color_transfer,color_primaries",
+                    "stream=codec_type,codec_name,profile,width,height,pix_fmt,avg_frame_rate,duration,nb_frames,sample_rate,channels,color_space,color_transfer,color_primaries",
                     "-of",
                     "json",
                 ])
@@ -1290,6 +1684,7 @@ mod tests {
                 .unwrap();
             assert!(probe.status.success());
             let metadata: serde_json::Value = serde_json::from_slice(&probe.stdout).unwrap();
+            println!("{stem}: {metadata}");
             let streams = metadata["streams"].as_array().unwrap();
             let video = streams
                 .iter()
@@ -1306,6 +1701,12 @@ mod tests {
             assert_eq!(video["height"], expected_height);
             assert_eq!(video["pix_fmt"], "yuv420p");
             assert_eq!(video["avg_frame_rate"], OUTPUT_FPS);
+            let frame_count: f64 = video["nb_frames"].as_str().unwrap().parse().unwrap();
+            let duration: f64 = video["duration"].as_str().unwrap().parse().unwrap();
+            assert!(
+                (duration - frame_count * 1001.0 / 60000.0).abs() < 0.0001,
+                "Frame durations must preserve the complete presentation timeline: {video}"
+            );
             assert_eq!(video["color_space"], "bt709");
             assert_eq!(video["color_transfer"], "bt709");
             assert_eq!(video["color_primaries"], "bt709");
@@ -1313,7 +1714,6 @@ mod tests {
             assert_eq!(audio["sample_rate"], "48000");
             assert_eq!(audio["channels"], 2);
         }
-        println!("encoder={}", encoder.label);
     }
 
     fn band_name_from_path(path: &Path) -> String {

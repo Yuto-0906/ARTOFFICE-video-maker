@@ -180,7 +180,7 @@ export function validateProject(value: unknown): value is ProjectV1 {
   const project = value as Partial<ProjectV1>;
   return (
     project.schemaVersion === 1 &&
-    (project.appVersion === "0.1.0" || project.appVersion === "0.2.0" || project.appVersion === "0.2.1" || project.appVersion === "0.3.0") &&
+    (project.appVersion === "0.1.0" || project.appVersion === "0.2.0" || project.appVersion === "0.2.1" || project.appVersion === "0.3.0" || project.appVersion === "0.4.0") &&
     typeof project.eventName === "string" &&
     Array.isArray(project.clips) &&
     (project.outputResolution === "1080p" || project.outputResolution === "1440p") &&

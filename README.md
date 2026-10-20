@@ -1,6 +1,6 @@
 # ARTOFFICE広報動画作成ソフト
 
-バンドサークルで撮影した複数のライブ動画を，出演順に1本へまとめるWindows用アプリです。
+バンドサークルで撮影した複数のライブ動画を，出演順に1本へまとめるWindows・macOS用アプリです。
 
 動画の前後カット，バンド名表示，映像のつなぎ合わせ，YouTube用チャプター，集合写真からのサムネイル作成を，画面の順番どおりに進めるだけで行えます。
 
@@ -20,17 +20,20 @@
 
 - Windows 10またはWindows 11
 - 64bit版
+- macOS 15以降：Apple SiliconまたはIntel（Mac版は試験版）
 
 アプリの利用に必要なフォントや動画処理用ファイルは同梱されています。別途インストールする必要はありません。
 
-macOSには対応していません。
+Mac版は0.4.0から追加する試験版です。配布状況は[Release一覧](https://github.com/Yuto-0906/ARTOFFICE-video-maker/releases)を確認してください。画面操作・動画プレビュー・実機での高速化は未確認です。
 
 ## ダウンロードと初回起動
 
-このアプリはインストーラーを使いません。ZIPをダウンロードして展開するだけで利用できます。
+### Windows版のダウンロードと起動
+
+Windows版はZIPをダウンロードして展開するだけで利用できます。
 
 1. [最新版のダウンロードページ](https://github.com/Yuto-0906/ARTOFFICE-video-maker/releases/latest)を開きます。
-2. ページ下部の「Assets」を開き，`ARTOFFICE-video-maker-v0.3.0-windows-x64.zip`をクリックします。
+2. ページ下部の「Assets」を開き，ファイル名がwindows-x64.zipで終わるZIPをクリックします。
 3. ダウンロードしたZIPを右クリックし，「すべて展開」を選びます。
 4. 展開先を選び，「展開」を押します。デスクトップやドキュメント内で構いません。
 5. 展開してできたフォルダーを開きます。
@@ -46,9 +49,20 @@ macOSには対応していません。
 2. 警告画面の「詳細情報」をクリックします。
 3. 表示された「実行」をクリックします。
 
-### アプリのフォルダーについて
+### Windows版のフォルダーについて
 
 `ARTOFFICE-video-maker.exe`だけを別の場所へ移動しないでください。同じフォルダー内の`tools`や`resources`も必要です。移動するときは，展開したフォルダーごと移動してください。
+
+### Mac版のダウンロードと起動
+
+1. [Release一覧](https://github.com/Yuto-0906/ARTOFFICE-video-maker/releases)からMac試験版を開きます。公開前の場合，配布用ファイルはまだ表示されません。
+2. MシリーズのMacはmacos-arm64.dmg，Intel搭載Macはmacos-x64.dmgで終わるファイルを選びます。「このMacについて」で搭載チップを確認できます。
+3. DMGを開き，アプリをApplicationsへドラッグします。
+4. Applicationsからアプリを開きます。ダウンロードしたアプリについての通常の確認が出た場合は，配布元を確認して起動します。
+
+署名・公証済みのRelease版を利用してください。GitHub Actionsのci-unsigned成果物は開発用です。Macの利用にHomebrew，FFmpeg，ImageMagickやフォントの追加インストールは不要です。
+
+Macの初回動作確認項目は[実機確認表](docs/MAC_TEST_CHECKLIST.md)，開発・署名の設定は[ビルドと署名](docs/MAC_BUILD_AND_SIGNING.md)を参照してください。
 
 ## 動画を準備する
 
@@ -204,7 +218,6 @@ YouTubeでは，チャプターが3件未満の場合や，各チャプターが
 - 音量調整，色補正，字幕追加
 - サムネイルへの文字入れ
 - YouTubeへの直接アップロード
-- macOS対応
 - 自動保存，自動更新
 
 第三者ソフトウェアに関する表示は[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)を参照してください。

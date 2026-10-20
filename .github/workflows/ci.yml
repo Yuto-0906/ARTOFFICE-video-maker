@@ -5,11 +5,23 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  macos:
+    uses: ./.github/workflows/macos.yml
   windows:
     runs-on: windows-latest
     timeout-minutes: 45
+    env:
+      AOV_REQUIRE_TOOLS: "1"
     steps:
       - uses: actions/checkout@v7.0.1
 

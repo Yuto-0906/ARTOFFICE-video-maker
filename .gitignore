@@ -14,3 +14,6 @@ _tool-downloads/
 .DS_Store
 .idea/
 .vscode/
+src-tauri/binaries/
+.macos-signing/
+__pycache__/

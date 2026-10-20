@@ -9,13 +9,13 @@ use exif::{In, Reader as ExifReader, Tag};
 use image::{
     codecs::jpeg::JpegEncoder, imageops::FilterType, DynamicImage, GenericImageView, ImageReader,
 };
+#[cfg(not(target_os = "macos"))]
 use tokio::process::Command;
 use uuid::Uuid;
 
-use crate::{
-    models::{CropRectNormalized, PreparedThumbnail, ThumbnailV1},
-    tools,
-};
+use crate::models::{CropRectNormalized, PreparedThumbnail, ThumbnailV1};
+#[cfg(not(target_os = "macos"))]
+use crate::tools;
 
 const PREVIEW_MAX_DIMENSION: u32 = 1920;
 const PREVIEW_JPEG_QUALITY: u8 = 90;
@@ -27,7 +27,7 @@ fn cache_directory() -> Result<PathBuf> {
         .join("thumbnail-previews");
     #[cfg(not(test))]
     let root = dirs::cache_dir()
-        .context("Windowsのキャッシュフォルダーが見つかりません。")?
+        .context("キャッシュフォルダーが見つかりません。")?
         .join("ARTOFFICE-video-maker")
         .join("thumbnail-previews");
     fs::create_dir_all(&root).context("サムネイル用キャッシュを作成できませんでした。")?;
@@ -78,6 +78,28 @@ fn decode_standard(path: &Path) -> Result<(DynamicImage, u32)> {
     Ok((apply_orientation(image, orientation), orientation))
 }
 
+#[cfg(target_os = "macos")]
+async fn decode_heic(path: &Path) -> Result<(DynamicImage, PathBuf)> {
+    let decoded = cache_directory()?.join(format!("decoded-{}.png", Uuid::new_v4()));
+    let source = path.to_path_buf();
+    let destination = decoded.clone();
+    tokio::task::spawn_blocking(move || crate::macos_image::decode_to_png(&source, &destination))
+        .await
+        .context("HEIC画像の読み込み処理が異常終了しました。")??;
+    let result = ImageReader::open(&decoded)
+        .context("変換したHEIC画像を開けませんでした。")?
+        .decode()
+        .context("変換したHEIC画像を読み取れませんでした。");
+    match result {
+        Ok(image) => Ok((image, decoded)),
+        Err(error) => {
+            let _ = fs::remove_file(decoded);
+            Err(error)
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
 async fn decode_heic(path: &Path) -> Result<(DynamicImage, PathBuf)> {
     let magick = tools::magick()
         .context("HEICデコーダーが見つかりません。vendor-tools/imagemagickを準備してください。")?;

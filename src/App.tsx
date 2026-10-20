@@ -49,7 +49,7 @@ type Step = "import" | "trim" | "thumbnail" | "export";
 
 const EMPTY_PROJECT: ProjectV1 = {
   schemaVersion: 1,
-  appVersion: "0.3.0",
+  appVersion: "0.4.0",
   eventName: "",
   clips: [],
   outputResolution: "1080p",
@@ -114,7 +114,7 @@ export default function App() {
             await font.load();
             document.fonts.add(font);
           } catch {
-            // Windowsにインストール済みのNoto Sans JPへフォールバックする。
+            // 読み込めない場合はシステムの日本語フォントを使用する。
           }
         }
       })
