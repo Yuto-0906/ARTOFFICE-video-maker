@@ -1,0 +1,60 @@
+name: ARTOFFICE
+options:
+  deploymentTarget:
+    iOS: '17.0'
+  xcodeVersion: '16.4'
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: '5.0'
+    TARGETED_DEVICE_FAMILY: '1,2'
+    IPHONEOS_DEPLOYMENT_TARGET: '17.0'
+    MARKETING_VERSION: '0.5.0'
+    CURRENT_PROJECT_VERSION: '1'
+    CODE_SIGN_STYLE: Automatic
+targets:
+  ARTOFFICE:
+    type: application
+    platform: iOS
+    sources: [App, Core, Media, Rendering]
+    resources: [Resources]
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: ARTOFFICE
+        ITSAppUsesNonExemptEncryption: false
+        UILaunchScreen: {}
+        UIApplicationSupportsIndirectInputEvents: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.yuto0906.artoffice-video-maker.ios
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SUPPORTS_MACCATALYST: NO
+        SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: NO
+  ARTOFFICETests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [Tests]
+    dependencies:
+      - target: ARTOFFICE
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.yuto0906.artoffice-video-maker.ios.tests
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  ARTOFFICE:
+    build:
+      targets:
+        ARTOFFICE: all
+    test:
+      targets: [ARTOFFICETests]
+      gatherCoverageData: true

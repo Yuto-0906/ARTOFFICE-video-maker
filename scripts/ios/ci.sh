@@ -1,0 +1,42 @@
+#!/bin/bash
+set -euo pipefail
+TASK_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+cd "$TASK_ROOT"
+mkdir -p ios/build
+if [[ ! -x ios/build/xcodegen/bin/xcodegen ]]; then
+  curl --fail --location --retry 3 'https://github.com/yonaskolb/XcodeGen/releases/download/2.44.1/xcodegen.zip' -o ios/build/xcodegen.zip
+  unzip -q -o ios/build/xcodegen.zip -d ios/build
+fi
+GENERATOR="$TASK_ROOT/ios/build/xcodegen/bin/xcodegen"
+"$GENERATOR" --version | tee ios/build/xcodegen-version.txt
+"$GENERATOR" --version | grep -q '2.44.1'
+"$GENERATOR" generate --spec ios/project.yml --project ios
+xcodebuild -version | tee ios/build/xcode-version.txt
+if [[ "${1:-check}" == check ]]; then
+  (cd ios && swift test) 2>&1 | tee ios/build/core-tests.log
+  xcodebuild -project ios/ARTOFFICE.xcodeproj -scheme ARTOFFICE -configuration Debug \
+    -destination 'generic/platform=iOS' -derivedDataPath ios/build/device CODE_SIGNING_ALLOWED=NO build \
+    > ios/build/device-build.log 2>&1 || { tail -n 120 ios/build/device-build.log; exit 1; }
+  xcrun simctl list devices available --json > ios/build/simulators.json
+  for FAMILY in iPhone iPad; do
+    DEVICE_ID="$(python3 - "$FAMILY" <<'PY'
+import json, sys
+with open('ios/build/simulators.json') as source:
+    devices = [d for runtime, values in json.load(source)['devices'].items() if 'iOS' in runtime for d in values if d.get('isAvailable') and sys.argv[1] in d['name']]
+if not devices:
+    raise SystemExit('No available ' + sys.argv[1] + ' simulator')
+devices.sort(key=lambda d: ('15' not in d['name'], d['name']))
+print(devices[0]['udid'])
+PY
+)"
+    xcodebuild -project ios/ARTOFFICE.xcodeproj -scheme ARTOFFICE -configuration Debug \
+      -destination "platform=iOS Simulator,id=$DEVICE_ID" -derivedDataPath ios/build/simulator \
+      -resultBundlePath "ios/build/${FAMILY}.xcresult" CODE_SIGNING_ALLOWED=NO test \
+      > "ios/build/${FAMILY}-tests.log" 2>&1 || { tail -n 160 "ios/build/${FAMILY}-tests.log"; exit 1; }
+  done
+elif [[ "${1:-}" == device ]]; then
+  python3 scripts/ios/sign.py
+else
+  echo 'Usage: ci.sh check|device' >&2; exit 2
+fi
+git rev-parse HEAD > ios/build/revision.txt

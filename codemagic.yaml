@@ -1,0 +1,31 @@
+workflows:
+  ios-check:
+    name: ARTOFFICE iOS checks
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    environment:
+      xcode: '26.0'
+    scripts:
+      - name: Build and test iPhone and iPad
+        script: bash scripts/ios/ci.sh check
+    artifacts:
+      - ios/build/*.log
+      - ios/build/*.txt
+      - ios/build/*.xcresult
+      - ios/build/device/Build/Products/Debug-iphoneos/ARTOFFICE.app
+  ios-device:
+    name: ARTOFFICE registered-device IPA
+    instance_type: mac_mini_m2
+    max_build_duration: 45
+    environment:
+      xcode: '26.0'
+      groups:
+        - artoffice_ios_signing
+    scripts:
+      - name: Build signed development app
+        script: bash scripts/ios/ci.sh device
+    artifacts:
+      - ios/build/*.ipa
+      - ios/build/*.log
+      - ios/build/*.txt
+      - ios/build/signing-report.json
