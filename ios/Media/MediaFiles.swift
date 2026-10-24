@@ -53,8 +53,7 @@ enum MediaFiles {
         let fps = try await video.load(.nominalFrameRate)
         let descriptions = try await video.load(.formatDescriptions)
         let hdr = descriptions.contains { description in
-            let ext = CMFormatDescriptionGetExtensions(description) as NSDictionary
-            let transfer = ext[kCMFormatDescriptionExtension_TransferFunction] as? String
+            let transfer = CMFormatDescriptionGetExtension(description, extensionKey: kCMFormatDescriptionExtension_TransferFunction) as? String
             return transfer == (kCMFormatDescriptionTransferFunction_SMPTE_ST_2084_PQ as String)
                 || transfer == (kCMFormatDescriptionTransferFunction_ITU_R_2100_HLG as String)
         }

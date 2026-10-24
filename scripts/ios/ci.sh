@@ -17,7 +17,7 @@ if [[ "${1:-check}" == check ]]; then
   (cd ios && swift test) 2>&1 | tee ios/build/core-tests.log
   xcodebuild -project ios/ARTOFFICE.xcodeproj -scheme ARTOFFICE -configuration Debug \
     -destination 'generic/platform=iOS' -derivedDataPath ios/build/device CODE_SIGNING_ALLOWED=NO build \
-    > ios/build/device-build.log 2>&1 || { tail -n 120 ios/build/device-build.log; exit 1; }
+    > ios/build/device-build.log 2>&1 || { grep -n -A 5 -B 2 -E 'error:|fatal error:|BUILD FAILED' ios/build/device-build.log || true; tail -n 35 ios/build/device-build.log; exit 1; }
   xcrun simctl list devices available --json > ios/build/simulators.json
   for FAMILY in iPhone iPad; do
     DEVICE_ID="$(python3 - "$FAMILY" <<'PY'
@@ -33,7 +33,7 @@ PY
     xcodebuild -project ios/ARTOFFICE.xcodeproj -scheme ARTOFFICE -configuration Debug \
       -destination "platform=iOS Simulator,id=$DEVICE_ID" -derivedDataPath ios/build/simulator \
       -resultBundlePath "ios/build/${FAMILY}.xcresult" CODE_SIGNING_ALLOWED=NO test \
-      > "ios/build/${FAMILY}-tests.log" 2>&1 || { tail -n 160 "ios/build/${FAMILY}-tests.log"; exit 1; }
+      > "ios/build/${FAMILY}-tests.log" 2>&1 || { grep -n -A 5 -B 2 -E 'error:|failed|TEST FAILED' "ios/build/${FAMILY}-tests.log" || true; tail -n 45 "ios/build/${FAMILY}-tests.log"; exit 1; }
   done
 elif [[ "${1:-}" == device ]]; then
   python3 scripts/ios/sign.py
