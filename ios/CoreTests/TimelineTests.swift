@@ -57,4 +57,30 @@ final class TimelineTests: XCTestCase {
         XCTAssertTrue(recovered.recovered); XCTAssertEqual(recovered.project.name, "新しいライブ")
         p.schemaVersion = 999; XCTAssertThrowsError(try p.validate())
     }
+    func testOlderAutosaveCannotOverwriteNewerSnapshot() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repository = ProjectRepository(root: root)
+        var older = Project(); older.name = "古い変更"
+        var newer = older; newer.name = "最新の変更"
+        try await repository.save(newer, revision: 2)
+        try await repository.save(older, revision: 1)
+        let saved = try await repository.load(newer.id)
+        XCTAssertEqual(saved.project.name, "最新の変更")
+    }
+    func testProjectDuplicationRetainsManagedMediaAfterDeletingOriginal() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repository = ProjectRepository(root: root)
+        var original = Project(); original.clips = [clip("素材", seconds: 20)]
+        let directory = await repository.directory(original.id)
+        try FileManager.default.createDirectory(at: directory.appendingPathComponent("Media"), withIntermediateDirectories: true)
+        let payload = Data("immutable source".utf8)
+        try payload.write(to: directory.appendingPathComponent(original.clips[0].source.relativePath!))
+        try await repository.save(original)
+        let copy = try await repository.duplicate(original)
+        try await repository.remove(original.id)
+        let copiedDirectory = await repository.directory(copy.id)
+        XCTAssertEqual(try Data(contentsOf: copiedDirectory.appendingPathComponent(copy.clips[0].source.relativePath!)), payload)
+    }
 }

@@ -95,7 +95,7 @@ struct ExportView: View {
             Section("保存先") {
                 LabeledContent("出力先", value: destination?.lastPathComponent ?? "アプリ内")
                 Button("ファイルのフォルダーを選択", systemImage: "folder") { folderPicker = true }
-                if destination != nil { Button("アプリ内に戻す") { destination = nil; destinationBookmark = nil } }
+                if destination != nil { Button("アプリ内に戻す") { destination = nil; destinationBookmark = nil; store.project.destinationBookmark = nil } }
                 Text("外部の保存先を選ぶと，アプリ内に完成動画を重複して作りません。処理済み区間は復旧のため端末内に保持します。")
                     .font(.caption).foregroundStyle(.secondary)
             }.disabled(store.exporting || store.busy)
@@ -126,7 +126,10 @@ struct ExportView: View {
                         .font(.caption).foregroundStyle(.secondary)
                     Button("中断する", role: .destructive) { store.cancelExport() }.frame(minHeight: 44)
                 } else {
-                    Button { store.startExport(destination: resolveDestination()) } label: { Label("書き出しを開始", systemImage: "square.and.arrow.up").frame(maxWidth: .infinity, minHeight: 44) }
+                    Button {
+                        do { store.startExport(destination: try resolveDestination()) }
+                        catch { store.message = "保存先へ再アクセスできません。フォルダーを選び直してください。" }
+                    } label: { Label("書き出しを開始", systemImage: "square.and.arrow.up").frame(maxWidth: .infinity, minHeight: 44) }
                         .buttonStyle(.borderedProminent).disabled(store.project.clips.isEmpty || store.timeline == nil || store.busy)
                     if !store.exportStatus.isEmpty { Text(store.exportStatus).font(.subheadline) }
                 }
@@ -151,11 +154,17 @@ struct ExportView: View {
                 if let url = try result.get().first {
                     let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }
                     destinationBookmark = try url.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)
+                    store.project.destinationBookmark = destinationBookmark
                     destination = url
                 }
             } catch { store.message = error.localizedDescription }
         }
         .sheet(isPresented: $sharing) { ShareSheet(urls: shareURLs) }
+        .onAppear {
+            destinationBookmark = store.project.destinationBookmark
+            do { destination = try resolveDestination() }
+            catch { store.message = "保存先のフォルダーを選び直してください。" }
+        }
         .alert("処理済み区間を削除しますか？", isPresented: $cleanup) {
             Button("削除", role: .destructive) { Task { await store.clearExportCache() } }
             Button("キャンセル", role: .cancel) {}
@@ -163,9 +172,9 @@ struct ExportView: View {
     }
     func bytes(_ value: Int64) -> String { ByteCountFormatter.string(fromByteCount: value, countStyle: .file) }
     func invalidReason() throws -> String { do { _ = try Timeline(store.project); return "動画を追加してください。" } catch { return error.localizedDescription } }
-    func resolveDestination() -> URL? {
+    func resolveDestination() throws -> URL? {
         guard let destinationBookmark else { return nil }
         var stale = false
-        return try? URL(resolvingBookmarkData: destinationBookmark, options: .withoutUI, bookmarkDataIsStale: &stale)
+        return try URL(resolvingBookmarkData: destinationBookmark, options: .withoutUI, bookmarkDataIsStale: &stale)
     }
 }

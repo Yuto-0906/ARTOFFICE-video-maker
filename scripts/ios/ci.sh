@@ -3,6 +3,7 @@ set -euo pipefail
 TASK_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$TASK_ROOT"
 mkdir -p ios/build
+swift scripts/ios/prepare-assets.swift
 if [[ ! -x ios/build/xcodegen/bin/xcodegen ]]; then
   curl --fail --location --retry 3 'https://github.com/yonaskolb/XcodeGen/releases/download/2.44.1/xcodegen.zip' -o ios/build/xcodegen.zip
   unzip -q -o ios/build/xcodegen.zip -d ios/build
@@ -22,11 +23,11 @@ if [[ "${1:-check}" == check ]]; then
     DEVICE_ID="$(python3 - "$FAMILY" <<'PY'
 import json, sys
 with open('ios/build/simulators.json') as source:
-    devices = [d for runtime, values in json.load(source)['devices'].items() if 'iOS' in runtime for d in values if d.get('isAvailable') and sys.argv[1] in d['name']]
+    devices = [(runtime, d) for runtime, values in json.load(source)['devices'].items() if 'iOS' in runtime for d in values if d.get('isAvailable') and sys.argv[1] in d['name']]
 if not devices:
     raise SystemExit('No available ' + sys.argv[1] + ' simulator')
-devices.sort(key=lambda d: ('15' not in d['name'], d['name']))
-print(devices[0]['udid'])
+devices.sort(key=lambda pair: ('iOS-27-0' not in pair[0], '15' not in pair[1]['name'], 'M4' not in pair[1]['name'], pair[1]['name']))
+print(devices[0][1]['udid'])
 PY
 )"
     xcodebuild -project ios/ARTOFFICE.xcodeproj -scheme ARTOFFICE -configuration Debug \

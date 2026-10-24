@@ -4,7 +4,7 @@ workflows:
     instance_type: mac_mini_m2
     max_build_duration: 60
     environment:
-      xcode: '26.0'
+      xcode: '27.1'
     scripts:
       - name: Build and test iPhone and iPad
         script: bash scripts/ios/ci.sh check
@@ -18,7 +18,7 @@ workflows:
     instance_type: mac_mini_m2
     max_build_duration: 45
     environment:
-      xcode: '26.0'
+      xcode: '27.1'
       groups:
         - artoffice_ios_signing
     scripts:

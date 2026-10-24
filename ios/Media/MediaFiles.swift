@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreTransferable
+import CryptoKit
 import ImageIO
 import UIKit
 import UniformTypeIdentifiers
@@ -26,7 +27,10 @@ final class SourceLease {
             url = try URL(resolvingBookmarkData: bookmark, options: .withoutUI, bookmarkDataIsStale: &stale)
             scoped = url.startAccessingSecurityScopedResource()
         } else { throw AppError.message("素材の参照がありません。") }
-        guard FileManager.default.isReadableFile(atPath: url.path) else { throw AppError.message("\(source.fileName)を開けません。「素材を選び直す」で復旧してください。") }
+        guard FileManager.default.isReadableFile(atPath: url.path) else {
+            if scoped { url.stopAccessingSecurityScopedResource() }
+            throw AppError.message("\(source.fileName)を開けません。「素材を選び直す」で復旧してください。")
+        }
     }
     deinit { if scoped { url.stopAccessingSecurityScopedResource() } }
 }
@@ -61,22 +65,34 @@ enum MediaFiles {
                            width: Int(abs(display.width)), height: Int(abs(display.height)),
                            hasAudio: !(try await asset.loadTracks(withMediaType: .audio)).isEmpty, isHDR: hdr)
     }
-    static func importVideo(_ url: URL, copy: Bool, directory: URL) async throws -> Clip {
+    static func importVideo(_ url: URL, copy: Bool, directory: URL, ownedTemporary: Bool = false,
+                            selectionIdentity: String? = nil, existingIDs: Set<String> = []) async throws -> Clip {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         try Task.checkCancellation()
         let original = url.lastPathComponent
         let metadata = try await probe(url, relativePath: nil, bookmark: nil)
         var source = metadata
+        // Identify the selected asset，rather than treating a partial content hash as proof
+        // that distinct concert recordings are identical. No full-file hash is needed.
+        let origin = selectionIdentity ?? "file:\(url.standardizedFileURL.path):\(metadata.byteCount):\(metadata.modifiedAt?.timeIntervalSince1970 ?? 0)"
+        let identity = SHA256.hash(data: Data(origin.utf8)).map { String(format: "%02x", $0) }.joined()
+        guard !existingIDs.contains(identity) else { throw AppError.message("同じ素材は既に取り込まれています。") }
+        source.importIdentity = identity
         if copy {
             let media = directory.appendingPathComponent("Media", isDirectory: true)
             try FileManager.default.createDirectory(at: media, withIntermediateDirectories: true)
-            try requireSpace(metadata.byteCount + 100_000_000, at: media)
+            try requireSpace((ownedTemporary ? 0 : metadata.byteCount) + 100_000_000, at: media)
             let relative = "Media/\(UUID().uuidString).\(url.pathExtension.lowercased())"
             let dest = directory.appendingPathComponent(relative)
-            do { try FileManager.default.copyItem(at: url, to: dest); try Task.checkCancellation() }
+            do {
+                if ownedTemporary { try FileManager.default.moveItem(at: url, to: dest) }
+                else { try FileManager.default.copyItem(at: url, to: dest) }
+                try Task.checkCancellation()
+            }
             catch { try? FileManager.default.removeItem(at: dest); throw error }
             source.relativePath = relative
+            source.modifiedAt = try dest.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
             source.modifiedAt = try dest.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
         } else {
             source.bookmark = try url.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)

@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreTransferable
 import Combine
 import PhotosUI
 import SwiftUI
@@ -60,7 +61,7 @@ import SwiftUI
             do {
                 try await Task.sleep(nanoseconds: 350_000_000); try Task.checkCancellation()
                 saveStatus = "保存中"
-                try await repository.save(snapshot)
+                try await repository.save(snapshot, revision: token)
                 if token == revision { saveStatus = "保存済み" }
             } catch is CancellationError {} catch {
                 if token == revision { saveStatus = "保存失敗"; message = error.localizedDescription }
@@ -71,7 +72,7 @@ import SwiftUI
         guard active else { return }
         saveTask?.cancel(); revision += 1
         var snapshot = project; snapshot.modifiedAt = Date()
-        try await repository.save(snapshot); saveStatus = "保存済み"
+        try await repository.save(snapshot, revision: revision); saveStatus = "保存済み"
     }
     func duplicate(_ value: Project) async {
         guard !busy else { return }; busy = true; defer { busy = false }
@@ -85,7 +86,7 @@ import SwiftUI
             await refresh()
         } catch { message = error.localizedDescription }
     }
-    func importVideos(_ urls: [URL], copy: Bool, relink: UUID? = nil) async {
+    func importVideos(_ urls: [URL], copy: Bool, relink: UUID? = nil, ownedTemporary: Bool = false, selectionIdentity: String? = nil) async {
         guard !busy, !exporting else { return }
         busy = true; defer { busy = false; importStatus = "" }
         let directory = self.directory
@@ -93,8 +94,10 @@ import SwiftUI
         for (index, url) in urls.enumerated() {
             importStatus = "動画を取り込んでいます（\(index + 1)/\(urls.count)）"
             do {
+                let existing: Set<String> = relink == nil ? Set((project.clips + added).compactMap(\.source.importIdentity)) : []
                 let clip = try await Task.detached(priority: .userInitiated) {
-                    try await MediaFiles.importVideo(url, copy: copy, directory: directory)
+                    try await MediaFiles.importVideo(url, copy: copy, directory: directory, ownedTemporary: ownedTemporary,
+                                                    selectionIdentity: selectionIdentity, existingIDs: existing)
                 }.value
                 if let id = relink, let i = project.clips.firstIndex(where: { $0.id == id }) {
                     guard clip.source.duration >= project.clips[i].end else { throw AppError.message("元のカット範囲より短い動画です。対応する素材を選んでください。") }
@@ -119,7 +122,8 @@ import SwiftUI
             do {
                 if let movie = try await item.loadTransferable(type: PickedMedia.self) {
                     busy = false
-                    await importVideos([movie.url], copy: true)
+                    await importVideos([movie.url], copy: true, ownedTemporary: true,
+                                       selectionIdentity: item.itemIdentifier.map { "photos:\($0)" })
                     try? FileManager.default.removeItem(at: movie.url.deletingLastPathComponent())
                 } else { busy = false; message = "写真から動画を取得できませんでした。" }
             } catch { busy = false; message = error.localizedDescription }

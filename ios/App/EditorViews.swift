@@ -101,7 +101,7 @@ struct ImportView: View {
                 Text(copy ? "素材をこの端末に保持し，次回もそのまま編集できます。素材分の空き容量が必要です。" : "ファイルを参照して重複保存を減らします。外付けドライブなどは編集・出力時にも接続が必要です。写真からの動画は常にコピーします。")
             }
             if store.project.clips.isEmpty { Section { Text("「出演順_バンド名.mp4」のファイル名なら，順番と名前を読み取ります。画面でも変更できます。").foregroundStyle(.secondary) } }
-            ForEach(Array(store.project.groups.enumerated()), id: \.element.first!.id) { groupIndex, group in
+            ForEach(Array(store.project.groups.enumerated()), id: \.offset) { groupIndex, group in
                 Section("\(groupIndex + 1)　\(group[0].bandName)") {
                     HStack {
                         Button("上へ", systemImage: "arrow.up") { store.project.moveGroup(groupIndex, by: -1) }.disabled(groupIndex == 0)
@@ -153,7 +153,11 @@ struct ImportView: View {
         stop()
         do {
             lease = try SourceLease(source: clip.source, projectDirectory: directory)
-            let player = AVPlayer(url: lease!.url); self.player = player
+            let item = AVPlayerItem(url: lease!.url)
+            let budget = DeviceBudget.current()
+            item.preferredForwardBufferDuration = 2
+            item.preferredMaximumResolution = CGSize(width: budget.previewHeight * 16 / 9, height: budget.previewHeight)
+            let player = AVPlayer(playerItem: item); self.player = player
             player.seek(to: CMTime(ticks: clip.start), toleranceBefore: .zero, toleranceAfter: .zero)
             observer = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.05, preferredTimescale: 600), queue: .main) { [weak self] value in
                 guard value.isNumeric else { return }; self?.current = value.seconds

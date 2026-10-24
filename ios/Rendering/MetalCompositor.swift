@@ -18,7 +18,10 @@ final class MetalCompositor: NSObject, AVVideoCompositing {
     ]
     let supportsWideColorSourceFrames = true
     let supportsHDRSourceFrames = true
-    private let queue = DispatchQueue(label: "artoffice.metal-compositor", qos: .userInitiated)
+    private let queue = DispatchQueue(label: "artoffice.metal-compositor", qos: .userInitiated, attributes: .concurrent)
+    private let budget = DeviceBudget.current()
+    private let capacity = NSCondition()
+    private var inFlight = 0
     private let context: CIContext?
     private let colorspace = CGColorSpace(name: CGColorSpace.itur_709)!
     private let titles = NSCache<NSString, CIImage>()
@@ -33,10 +36,20 @@ final class MetalCompositor: NSObject, AVVideoCompositing {
         super.init(); titles.countLimit = 4
     }
     func renderContextChanged(_ newRenderContext: AVVideoCompositionRenderContext) { titles.removeAllObjects() }
-    func cancelAllPendingVideoCompositionRequests() { lock.lock(); generation += 1; lock.unlock() }
+    func cancelAllPendingVideoCompositionRequests() {
+        lock.lock(); generation += 1; lock.unlock()
+        capacity.lock(); capacity.broadcast(); capacity.unlock()
+    }
     func startRequest(_ request: AVAsynchronousVideoCompositionRequest) {
         lock.lock(); let token = generation; lock.unlock()
+        // Bound retained source and destination buffers before queueing GPU work. A hot
+        // phone uses one frame; a cool iPad with sufficient memory can pipeline three.
+        capacity.lock()
+        while inFlight >= budget.thermalInFlight { capacity.wait() }
+        inFlight += 1
+        capacity.unlock()
         queue.async { [self] in
+            defer { capacity.lock(); inFlight -= 1; capacity.broadcast(); capacity.unlock() }
             autoreleasepool {
                 lock.lock(); let cancelled = token != generation; lock.unlock()
                 if cancelled { request.finishCancelledRequest(); return }

@@ -56,7 +56,10 @@ struct Timeline {
         let framesPerChunk = max(1, Int64(seconds) * Int64(Clock.scale) / rate.frameTicks)
         var frame: Int64 = 0, result: [ExportChunk] = []
         while frame < totalFrames {
-            let next = min(totalFrames, frame + framesPerChunk)
+            var next = min(totalFrames, frame + framesPerChunk)
+            // Fold a sub-second remainder into the final chunk instead of starting another
+            // encoder/AAC stream for a single frame at the end of a five-hour timeline.
+            if totalFrames - next < Int64(Clock.scale) / rate.frameTicks { next = totalFrames }
             result.append(ExportChunk(index: result.count, start: frame * rate.frameTicks, end: next * rate.frameTicks))
             frame = next
         }

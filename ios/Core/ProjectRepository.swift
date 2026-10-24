@@ -3,9 +3,12 @@ import Foundation
 /// Serializes every save. Autosave never copies or hashes media.
 actor ProjectRepository {
     let root: URL
+    private var savedRevisions: [UUID: Int] = [:]
     init(root: URL) { self.root = root }
     func directory(_ id: UUID) -> URL { root.appendingPathComponent(id.uuidString, isDirectory: true) }
-    func save(_ project: Project) throws {
+    func save(_ project: Project, revision: Int? = nil) throws {
+        try Task.checkCancellation()
+        if let revision, let saved = savedRevisions[project.id], revision < saved { return }
         try project.validate()
         let directory = directory(project.id), file = directory.appendingPathComponent("project.json")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -17,6 +20,7 @@ actor ProjectRepository {
             try old.write(to: directory.appendingPathComponent("previous.json"), options: .atomic)
         }
         try data.write(to: file, options: .atomic)
+        if let revision { savedRevisions[project.id] = revision }
     }
     func load(_ id: UUID) throws -> (project: Project, recovered: Bool) {
         let directory = directory(id)
@@ -46,8 +50,10 @@ actor ProjectRepository {
             let media = Set(original.clips.compactMap(\.source.relativePath) + [original.thumbnail?.relativePath].compactMap { $0 })
             for path in media {
                 let src = from.appendingPathComponent(path), dest = to.appendingPathComponent(path)
-                // APFS clone-on-write copy is preferred by FileManager where supported.
-                try FileManager.default.copyItem(at: src, to: dest)
+                // Managed media is immutable. Linking avoids copying hours of footage when
+                // duplicating a project; unlinking either project preserves the other copy.
+                do { try FileManager.default.linkItem(at: src, to: dest) }
+                catch { try FileManager.default.copyItem(at: src, to: dest) }
             }
             try save(copy); return copy
         } catch { try? FileManager.default.removeItem(at: to); throw error }

@@ -47,6 +47,7 @@ struct MediaSource: Codable, Equatable {
     var height: Int
     var hasAudio: Bool
     var isHDR: Bool
+    var importIdentity: String? = nil
 }
 
 struct Clip: Codable, Identifiable, Equatable {
@@ -86,6 +87,7 @@ struct Project: Codable, Identifiable, Equatable {
     var frameRate: FrameRate = .fps30
     var thumbnail: PhotoCrop?
     var selectedClip: UUID?
+    var destinationBookmark: Data?
     var groups: [[Clip]] {
         var result: [[Clip]] = []
         for clip in clips {

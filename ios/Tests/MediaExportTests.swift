@@ -22,13 +22,15 @@ final class MediaExportTests: XCTestCase {
         let asset = AVURLAsset(url: output)
         let duration = try await asset.load(.duration)
         XCTAssertEqual(duration.seconds, 5.5, accuracy: 0.06)
-        let video = try XCTUnwrap(try await asset.loadTracks(withMediaType: .video).first)
+        let videoTracks = try await asset.loadTracks(withMediaType: .video)
+        let video = try XCTUnwrap(videoTracks.first)
         let size = try await video.load(.naturalSize)
         XCTAssertEqual(size, CGSize(width: 1920, height: 1080))
         let text = try String(contentsOf: XCTUnwrap(files.first { $0.pathExtension == "txt" }), encoding: .utf8)
         XCTAssertEqual(text, "0:00:00 日本語バンド\n0:00:02 次のバンド\n")
         let reader = try AVAssetReader(asset: asset)
-        let audio = AVAssetReaderTrackOutput(track: try XCTUnwrap(try await asset.loadTracks(withMediaType: .audio).first), outputSettings: [AVFormatIDKey: kAudioFormatLinearPCM])
+        let audioTracks = try await asset.loadTracks(withMediaType: .audio)
+        let audio = AVAssetReaderTrackOutput(track: try XCTUnwrap(audioTracks.first), outputSettings: [AVFormatIDKey: kAudioFormatLinearPCM])
         reader.add(audio); XCTAssertTrue(reader.startReading())
         var lastEnd = 0.0, samples = 0
         while let sample = audio.copyNextSampleBuffer() {
