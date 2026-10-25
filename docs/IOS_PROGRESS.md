@@ -37,6 +37,8 @@
 
 Codemagicで`codex/ios-native`の対象コミットを選び，`ios-check`を実行する。`scripts/ios/ci.sh check`はCoreのテスト，実機ターゲットの署名なしビルド，iPhone・iPadシミュレーターのメディア処理テストを順に実行し，`ios/build/`へログと結果を残す。
 
+シミュレーター用のアプリとテストは，端末の起動前に`build-for-testing`でまとめてコンパイルする。各画面サイズでは同じ成果物を`test-without-building`で実行する。ソースのコンパイルエラーのためにOSの初回データ移行を待たない構成とする。
+
 取込み処理と出力形式の追加検証には，`ios-media-check`を使える。Coreテスト，実機ターゲットのコンパイル，両シミュレーターの素材再選択テスト，1080p・1440p×4種類のフレームレート，区間出力・音声境界・再利用を確認する。保存・画面・中止操作を含む全体検証は`ios-check`で別に確認し，部分的な試験結果と混同しない。
 
 署名用の`ios-device`は，アプリ専用のプロファイルと利用可能なApple Development証明書を照合した後に実行する。`artoffice_ios_signing`グループで次のSecretを参照する。

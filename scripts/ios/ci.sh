@@ -38,6 +38,10 @@ if [[ "${1:-check}" == check ]]; then
   xcodebuild -project ios/ARTOFFICE.xcodeproj -scheme ARTOFFICE -configuration Debug \
     -destination 'generic/platform=iOS' -derivedDataPath ios/build/device CODE_SIGNING_ALLOWED=NO build \
     > ios/build/device-build.log 2>&1 || { grep -n -A 5 -B 2 -E 'error:|fatal error:|BUILD FAILED' ios/build/device-build.log || true; tail -n 35 ios/build/device-build.log; exit 1; }
+  echo 'Compiling simulator tests before booting devices'
+  xcodebuild -project ios/ARTOFFICE.xcodeproj -scheme ARTOFFICE -configuration Debug \
+    -destination 'generic/platform=iOS Simulator' -derivedDataPath ios/build/simulator CODE_SIGNING_ALLOWED=NO build-for-testing \
+    > ios/build/simulator-build.log 2>&1 || { grep -n -A 5 -B 2 -E 'error:|fatal error:|BUILD FAILED' ios/build/simulator-build.log || true; tail -n 35 ios/build/simulator-build.log; exit 1; }
   xcrun simctl list devices available --json > ios/build/simulators.json
   OVERALL_RESULT=0
   for FAMILY in iPhone iPad; do
@@ -65,7 +69,7 @@ PY
       -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 600 \
       ${TEST_DIAGNOSTICS[@]+"${TEST_DIAGNOSTICS[@]}"} \
       ${TEST_SELECTION[@]+"${TEST_SELECTION[@]}"} \
-      -resultBundlePath "ios/build/${FAMILY}.xcresult" CODE_SIGNING_ALLOWED=NO test \
+      -resultBundlePath "ios/build/${FAMILY}.xcresult" CODE_SIGNING_ALLOWED=NO test-without-building \
       2>&1 | tee "ios/build/${FAMILY}-tests.log" | awk '/Test Case|Test Suite|ARTOFFICE AAC|ARTOFFICE export|ARTOFFICE test|error:|failed|TEST FAILED|TEST SUCCEEDED|CoreSimulator|IDE.*(error|Error|timed out)|Testing started/ { print; fflush() }' \
       || TEST_RESULT=$?
     if [[ "$TEST_RESULT" != 0 ]]; then
