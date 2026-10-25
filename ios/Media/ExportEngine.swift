@@ -62,6 +62,10 @@ struct ExportReport: Codable {
     var hardwareVerification = "Requires device profiling; simulator is not evidence"
     var audioBitRate: Int = 0
     var supportedAudioBitRates: [Int] = []
+    var status = "running"
+    var peakSampledResidentBytes: UInt64 = 0
+    var memorySamplingIntervalSeconds = 1
+    var performanceWindows: [PerformanceWindow] = []
     var chunks: [ChunkMeasurement] = []
     var elapsedSeconds: Double = 0
     var finalizationSeconds: Double = 0
@@ -106,6 +110,16 @@ enum ExportEngine {
         let clock = Date()
         var report = ExportReport(budget: DeviceBudget.current(), systemVersion: UIDevice.current.systemVersion,
             metalDevice: MTLCreateSystemDefaultDevice()?.name ?? "unavailable", resolution: project.resolution.rawValue, frameRate: project.frameRate.rawValue)
+        let sampler = PerformanceSampler()
+        defer {
+            let sampled = sampler.snapshot()
+            report.peakSampledResidentBytes = sampled.peak; report.performanceWindows = sampled.windows
+            report.elapsedSeconds = Date().timeIntervalSince(clock)
+            if report.status != "completed" { report.status = control.isCancelled ? "cancelled" : "failed" }
+            // Preserve measurements even when a long export is interrupted. The sampled
+            // peak is labelled explicitly; sub-second memory spikes can be missed.
+            try? JSONEncoder().encode(report).write(to: job.appendingPathComponent("performance.json"), options: .atomic)
+        }
         let audioEncoding = try AudioEncoding.supported()
         report.audioBitRate = audioEncoding.bitRate; report.supportedAudioBitRates = audioEncoding.supportedBitRates
         print("ARTOFFICE AAC selected=\(audioEncoding.bitRate) supported=\(audioEncoding.supportedBitRates)")
@@ -115,6 +129,7 @@ enum ExportEngine {
         defer { withExtendedLifetime(composition.leases) {} }
         for chunk in chunks {
             try control.check()
+            trace("chunk \(chunk.index) range=\(Clock.seconds(chunk.start))...\(Clock.seconds(chunk.end))")
             let output = chunkURL(chunk, job: job)
             if let receipt = journal.completed[String(chunk.index)], try await reusable(output, receipt: receipt, chunk: chunk, project: project) {
                 progress(Double(chunk.end) / Double(timeline.duration) * 0.94, "処理済みの区間を再利用しています")
@@ -138,6 +153,8 @@ enum ExportEngine {
                 try JSONEncoder().encode(journal).write(to: journalURL, options: .atomic)
                 report.chunks.append(ChunkMeasurement(index: chunk.index, mediaSeconds: Clock.seconds(chunk.duration),
                     elapsedSeconds: Date().timeIntervalSince(start), residentBytes: residentMemory(), thermalState: ProcessInfo.processInfo.thermalState.rawValue))
+                let sampled = sampler.snapshot()
+                report.peakSampledResidentBytes = sampled.peak; report.performanceWindows = sampled.windows
                 try JSONEncoder().encode(report).write(to: job.appendingPathComponent("performance.json"), options: .atomic)
             } catch { try? FileManager.default.removeItem(at: partial); throw error }
         }
@@ -161,6 +178,7 @@ enum ExportEngine {
             if let crop = project.thumbnail { try MediaFiles.exportPhoto(crop, directory: directory, output: photo); generated.append(photo) }
             try ExportHistory.record(files: generated, job: job, destination: destination)
             report.elapsedSeconds = Date().timeIntervalSince(clock); report.finalizationSeconds = Date().timeIntervalSince(finalizeStart)
+            report.status = "completed"
             let reportURL = job.appendingPathComponent("performance.json")
             // Once all output files and their receipt are committed，a diagnostic write
             // failure must not remove the user's five-hour completed video.
@@ -237,13 +255,17 @@ enum ExportEngine {
         guard writer.startWriting() else { throw writer.error ?? AppError.message("書込みを開始できません。") }
         writer.startSession(atSourceTime: CMTime(ticks: chunk.start))
         guard reader.startReading() else { try control.check(); throw reader.error ?? AppError.message("読込みを開始できません。") }
+        trace("reader started; audioTracks=\(audioTracks.count)")
         let audioPump = try AudioPump(output: audioOutput, chunk: chunk)
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let group = DispatchGroup(); group.enter(); group.enter()
             let vQueue = DispatchQueue(label: "artoffice.encode.video", qos: .userInitiated)
             let aQueue = DispatchQueue(label: "artoffice.encode.audio", qos: .userInitiated)
             var vFinished = false, aFinished = false
+            var firstVideo = true, firstAudio = true
             var lastUpdate = Date.distantPast
+            var lastFrameTrace = Date.distantPast
+            var lastTrace = Date()
             let failure = PumpFailure()
             // Cancellation may stop readiness callbacks. Wake both queues explicitly so the
             // continuation cannot hang waiting for callbacks from a cancelled writer.
@@ -257,6 +279,10 @@ enum ExportEngine {
             let monitor = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
             monitor.schedule(deadline: .now() + .milliseconds(200), repeating: .milliseconds(200))
             monitor.setEventHandler {
+                if Date().timeIntervalSince(lastTrace) >= 10 {
+                    lastTrace = Date()
+                    trace("pump reader=\(reader.status.rawValue) writer=\(writer.status.rawValue) videoReady=\(vInput.isReadyForMoreMediaData) audioReady=\(aInput.isReadyForMoreMediaData)")
+                }
                 if writer.status == .failed || reader.status == .failed {
                     failure.record(writer.error ?? reader.error ?? AppError.message("動画の読込み・書込み処理が停止しました。"))
                     reader.cancelReading(); finishQueues()
@@ -270,7 +296,8 @@ enum ExportEngine {
                         vFinished = true; if writer.status == .writing { vInput.markAsFinished() }; group.leave(); return
                     }
                     let sample = autoreleasepool { videos.copyNextSampleBuffer() }
-                    guard let sample else { vFinished = true; if writer.status == .writing { vInput.markAsFinished() }; group.leave(); return }
+                    guard let sample else { trace("video EOF"); vFinished = true; if writer.status == .writing { vInput.markAsFinished() }; group.leave(); return }
+                    if firstVideo { firstVideo = false; trace("first video frame=\(CMSampleBufferGetPresentationTimeStamp(sample).seconds)") }
                     guard vInput.append(sample) else {
                         failure.record(writer.error ?? AppError.message("映像フレームを書き込めませんでした。"))
                         vFinished = true; reader.cancelReading(); group.leave()
@@ -278,6 +305,9 @@ enum ExportEngine {
                     }
                     if Date().timeIntervalSince(lastUpdate) > 0.5 {
                         lastUpdate = Date(); progress(CMSampleBufferGetPresentationTimeStamp(sample).ticks)
+                        if Date().timeIntervalSince(lastFrameTrace) > 5 {
+                            lastFrameTrace = Date(); trace("video progress=\(CMSampleBufferGetPresentationTimeStamp(sample).seconds)")
+                        }
                     }
                 }
             }
@@ -289,8 +319,10 @@ enum ExportEngine {
                     }
                     do {
                         guard let sample = try autoreleasepool(invoking: { try audioPump.next() }) else {
+                            trace("audio EOF")
                             aFinished = true; if writer.status == .writing { aInput.markAsFinished() }; group.leave(); return
                         }
+                        if firstAudio { firstAudio = false; trace("first audio frame=\(CMSampleBufferGetPresentationTimeStamp(sample).seconds)") }
                         guard aInput.append(sample) else {
                             failure.record(writer.error ?? AppError.message("音声データを書き込めませんでした。"))
                             aFinished = true; reader.cancelReading(); group.leave()
@@ -304,17 +336,30 @@ enum ExportEngine {
             }
             group.notify(queue: vQueue) {
                 monitor.cancel()
+                trace("pumps finished; reader=\(reader.status.rawValue) writer=\(writer.status.rawValue)")
                 if control.isCancelled { writer.cancelWriting(); continuation.resume(throwing: CancellationError()); return }
                 if let error = failure.error ?? writer.error ?? reader.error {
                     if writer.status == .writing { writer.cancelWriting() }; continuation.resume(throwing: error); return
                 }
+                // The pumps are finished now. Cancellation during finishWriting can safely
+                // cancel the writer on this queue as well，instead of waiting for finalization.
+                control.setWakeup {
+                    vQueue.async { if writer.status == .writing { writer.cancelWriting() } }
+                }
                 writer.endSession(atSourceTime: CMTime(ticks: chunk.end))
                 writer.finishWriting {
-                    if writer.status == .completed { continuation.resume() }
+                    trace("writer finished status=\(writer.status.rawValue)")
+                    if control.isCancelled { continuation.resume(throwing: CancellationError()) }
+                    else if writer.status == .completed { continuation.resume() }
                     else { continuation.resume(throwing: writer.error ?? AppError.message("区間の書込みに失敗しました。")) }
                 }
             }
         }
+    }
+    private static func trace(_ message: String) {
+        #if DEBUG
+        print("ARTOFFICE export \(message)")
+        #endif
     }
     static func mux(chunks: [ExportChunk], job: URL, output: URL, control: ExportControl) async throws {
         let composition = AVMutableComposition()

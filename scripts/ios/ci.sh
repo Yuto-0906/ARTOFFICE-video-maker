@@ -13,6 +13,13 @@ GENERATOR="$TASK_ROOT/ios/build/xcodegen/bin/xcodegen"
 "$GENERATOR" --version | grep -q '2.44.1'
 "$GENERATOR" generate --spec ios/project.yml --project ios
 xcodebuild -version | tee ios/build/xcode-version.txt
+xcodebuild -help > ios/build/xcodebuild-help.log 2>&1
+TEST_DIAGNOSTICS=()
+if grep -q -- '-collect-test-diagnostics' ios/build/xcodebuild-help.log; then
+  # Keep the xcresult，but avoid a ten-minute simulator diagnostic collection
+  # blocking every failing test on the CI host.
+  TEST_DIAGNOSTICS=(-collect-test-diagnostics never)
+fi
 if [[ "${1:-check}" == check ]]; then
   echo 'Running model and persistence tests'
   (cd ios && swift test) 2>&1 | tee ios/build/core-tests.log
@@ -37,8 +44,9 @@ PY
       -destination "platform=iOS Simulator,id=$DEVICE_ID" -derivedDataPath ios/build/simulator \
       -parallel-testing-enabled NO -test-timeouts-enabled YES \
       -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 240 \
+      "${TEST_DIAGNOSTICS[@]}" \
       -resultBundlePath "ios/build/${FAMILY}.xcresult" CODE_SIGNING_ALLOWED=NO test \
-      2>&1 | tee "ios/build/${FAMILY}-tests.log" | awk '/Test Case|Test Suite|ARTOFFICE AAC|error:|failed|TEST FAILED|TEST SUCCEEDED/ { print; fflush() }' \
+      2>&1 | tee "ios/build/${FAMILY}-tests.log" | awk '/Test Case|Test Suite|ARTOFFICE AAC|ARTOFFICE export|error:|failed|TEST FAILED|TEST SUCCEEDED/ { print; fflush() }' \
       || { grep -n -A 5 -B 2 -E 'error:|failed|TEST FAILED' "ios/build/${FAMILY}-tests.log" || true; tail -n 45 "ios/build/${FAMILY}-tests.log"; exit 1; }
     xcrun xcresulttool export attachments --path "ios/build/${FAMILY}.xcresult" --output-path "ios/build/${FAMILY}-screenshots"
     echo "$FAMILY tests passed"

@@ -92,7 +92,6 @@ enum MediaFiles {
             catch { try? FileManager.default.removeItem(at: dest); throw error }
             source.relativePath = relative
             source.modifiedAt = try dest.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
-            source.modifiedAt = try dest.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
         } else {
             source.bookmark = try url.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)
             // Prove the persisted reference resolves before committing it to the project.
