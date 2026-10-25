@@ -84,6 +84,21 @@ final class MediaExportTests: XCTestCase {
         p.resolution = .quadHD
         XCTAssertNotEqual(try ExportEngine.key(p), key)
     }
+    func testShortRelinkIsRejectedBeforeCopyingMedia() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let source = root.appendingPathComponent("short.mp4"), directory = root.appendingPathComponent("project")
+        try await fixture(url: source, frames: 30, red: true)
+        do {
+            _ = try await MediaFiles.importVideo(source, copy: true, directory: directory, minimumDuration: Clock.ticks(5))
+            XCTFail("A short replacement must be rejected before copying")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("元のカット範囲より短い"))
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("Media").path))
+        XCTAssertTrue(FileManager.default.isReadableFile(atPath: source.path))
+    }
     func testCancellationWhileEncodingRetainsSavedProject() async throws {
         executionTimeAllowance = 600
         log("active cancellation beginning")

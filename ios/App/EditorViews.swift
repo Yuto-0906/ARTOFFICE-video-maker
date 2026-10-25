@@ -68,7 +68,7 @@ struct EditorView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { Task { do { try await store.flush() } catch { store.message = error.localizedDescription } } } label: {
-                        Label(store.saveStatus, systemImage: store.saveStatus == "保存済み" ? "checkmark.icloud" : "arrow.triangle.2.circlepath")
+                        Label(store.saveStatus, systemImage: store.saveStatus == "保存済み" ? "checkmark.circle" : "arrow.triangle.2.circlepath")
                             .font(.caption)
                     }.disabled(store.busy).accessibilityIdentifier("saveProject")
                 }

@@ -22,6 +22,12 @@ if grep -q -- '-collect-test-diagnostics' ios/build/xcodebuild-help.log; then
   TEST_DIAGNOSTICS=(-collect-test-diagnostics never)
 fi
 if [[ "${1:-check}" == check ]]; then
+  TEST_SELECTION=()
+  case "${2:-all}" in
+    all) ;;
+    import) TEST_SELECTION=(-only-testing:ARTOFFICETests/MediaExportTests/testShortRelinkIsRejectedBeforeCopyingMedia) ;;
+    *) echo 'Unknown test selection' >&2; exit 2 ;;
+  esac
   echo 'Running model and persistence tests'
   (cd ios && swift test) 2>&1 | tee ios/build/core-tests.log
   echo 'Building the physical-device target without signing'
@@ -54,6 +60,7 @@ PY
       -parallel-testing-enabled NO -test-timeouts-enabled YES \
       -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 600 \
       ${TEST_DIAGNOSTICS[@]+"${TEST_DIAGNOSTICS[@]}"} \
+      ${TEST_SELECTION[@]+"${TEST_SELECTION[@]}"} \
       -resultBundlePath "ios/build/${FAMILY}.xcresult" CODE_SIGNING_ALLOWED=NO test \
       2>&1 | tee "ios/build/${FAMILY}-tests.log" | awk '/Test Case|Test Suite|ARTOFFICE AAC|ARTOFFICE export|ARTOFFICE test|error:|failed|TEST FAILED|TEST SUCCEEDED|CoreSimulator|IDE.*(error|Error|timed out)|Testing started/ { print; fflush() }' \
       || TEST_RESULT=$?
@@ -73,5 +80,5 @@ PY
 elif [[ "${1:-}" == device ]]; then
   python3 scripts/ios/sign.py
 else
-  echo 'Usage: ci.sh check|device' >&2; exit 2
+  echo 'Usage: ci.sh check [all|import]|device' >&2; exit 2
 fi

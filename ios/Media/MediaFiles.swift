@@ -65,12 +65,15 @@ enum MediaFiles {
                            hasAudio: !(try await asset.loadTracks(withMediaType: .audio)).isEmpty, isHDR: hdr)
     }
     static func importVideo(_ url: URL, copy: Bool, directory: URL, ownedTemporary: Bool = false,
-                            selectionIdentity: String? = nil, existingIDs: Set<String> = []) async throws -> Clip {
+                            selectionIdentity: String? = nil, existingIDs: Set<String> = [], minimumDuration: Int64 = 0) async throws -> Clip {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         try Task.checkCancellation()
         let original = url.lastPathComponent
         let metadata = try await probe(url, relativePath: nil, bookmark: nil)
+        guard metadata.duration >= minimumDuration else {
+            throw AppError.message("元のカット範囲より短い動画です。対応する素材を選んでください。")
+        }
         var source = metadata
         // Identify the selected asset，rather than treating a partial content hash as proof
         // that distinct concert recordings are identical. No full-file hash is needed.

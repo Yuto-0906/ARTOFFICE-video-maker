@@ -37,6 +37,8 @@
 
 Codemagicで`codex/ios-native`の対象コミットを選び，`ios-check`を実行する。`scripts/ios/ci.sh check`はCoreのテスト，実機ターゲットの署名なしビルド，iPhone・iPadシミュレーターのメディア処理テストを順に実行し，`ios/build/`へログと結果を残す。
 
+取込み処理だけを変更した場合は，`ios-import-check`でCoreテスト，実機ターゲットのコンパイル，両シミュレーターの素材再選択テストを行える。動画出力・保存・画面の全体検証は`ios-check`で別に確認し，部分的な試験結果と混同しない。
+
 署名用の`ios-device`は，アプリ専用のプロファイルと利用可能なApple Development証明書を照合した後に実行する。`artoffice_ios_signing`グループで次のSecretを参照する。
 
 - `ARTOFFICE_DEVELOPMENT_P12_BASE64`
@@ -71,3 +73,7 @@ AAC設定の照会方法は[AppleのapplicableEncodeBitRatesの説明](https://d
 4回目では処理中の中止試験が約233秒，区間出力試験が約229秒，UI試験が約101秒で終了した。最初の映像が届くまでの待ち時間も確認されており，この試験環境の結果を実機の速度として扱わない。メディア試験の上限を600秒へ変更し，API呼出し前後とMetal処理のログを追加して内訳を確認する。音声の対応設定はプロセス内で再利用し，繰り返す出力で同じエンコーダー照会をやり直さない。CIはシミュレーターの起動状況を表示し，iPhone側の失敗時にも結果・画面を保存してiPad側を試験する構成へ変更する。
 
 経過時間の計測と，ユーザーが選択した外部素材のメタデータ確認に合わせてPrivacy Manifestも更新した。理由は[AppleのAPI利用理由](https://developer.apple.com/documentation/bundleresources/app-privacy-configuration/nsprivacyaccessedapitypes/nsprivacyaccessedapitype)に基づく。診断へ保存するのはアプリ内の経過時間であり，端末の起動時刻は保存しない。
+
+大容量素材の再選択では，保存済みのカット範囲より短い動画をコピー前に拒否する処理を追加した。不適切な置換素材を数十GBコピーしてから失敗し，未使用ファイルが残ることを防ぐ。元ファイルとコピー先の状態を確認する回帰試験を追加し，`ios-import-check`で確認する。
+
+今回のPC確認ではApple Mobile Device Serviceは稼働していたが，接続中のiPhone・iPadは検出されなかった。Apple Developerもサインインが必要な状態であり，ユーザーの希望によりログイン操作は後日行う。署名情報をCodemagicへ送信したり，端末へインストールしたりする段階には進んでいない。

@@ -14,6 +14,19 @@ workflows:
       - ios/build/*.xcresult
       - ios/build/*-screenshots/**
       - ios/build/device/Build/Products/Debug-iphoneos/ARTOFFICE.app
+  ios-import-check:
+    name: ARTOFFICE import validation
+    instance_type: mac_mini_m2
+    max_build_duration: 30
+    environment:
+      xcode: '27.1'
+    scripts:
+      - name: Verify replacement files before copying
+        script: bash scripts/ios/ci.sh check import
+    artifacts:
+      - ios/build/*.log
+      - ios/build/*.txt
+      - ios/build/*.xcresult
   ios-device:
     name: ARTOFFICE registered-device IPA
     instance_type: mac_mini_m2

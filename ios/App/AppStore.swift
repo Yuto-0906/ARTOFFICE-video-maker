@@ -111,9 +111,10 @@ import SwiftUI
             importStatus = "動画を取り込んでいます（\(index + 1)/\(urls.count)）"
             do {
                 let existing: Set<String> = relink == nil ? Set(project.clips.compactMap(\.source.importIdentity)) : []
+                let minimumDuration = relink.flatMap { id in project.clips.first(where: { $0.id == id })?.end } ?? 0
                 let clip = try await Task.detached(priority: .userInitiated) {
                     try await MediaFiles.importVideo(url, copy: copy, directory: directory, ownedTemporary: ownedTemporary,
-                                                    selectionIdentity: selectionIdentity, existingIDs: existing)
+                                                    selectionIdentity: selectionIdentity, existingIDs: existing, minimumDuration: minimumDuration)
                 }.value
                 if let id = relink, let i = project.clips.firstIndex(where: { $0.id == id }) {
                     guard clip.source.duration >= project.clips[i].end else { throw AppError.message("元のカット範囲より短い動画です。対応する素材を選んでください。") }
