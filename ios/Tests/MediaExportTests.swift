@@ -4,6 +4,37 @@ import XCTest
 @testable import ARTOFFICE
 
 final class MediaExportTests: XCTestCase {
+    func testCompletedCleanupPreservesSourcesChunksAndExternalFiles() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let jobs = root.appendingPathComponent("jobs"), project = Project()
+        let job = jobs.appendingPathComponent(project.id.uuidString).appendingPathComponent(try ExportEngine.key(project))
+        let completed = job.appendingPathComponent("Completed"), sourceDirectory = root.appendingPathComponent("Projects/Media")
+        let external = root.appendingPathComponent("external")
+        for directory in [completed, sourceDirectory, external] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        let internalFile = completed.appendingPathComponent("inside.mp4"), externalFile = external.appendingPathComponent("outside.mp4")
+        let source = sourceDirectory.appendingPathComponent("source.mp4"), metadata = sourceDirectory.deletingLastPathComponent().appendingPathComponent("project.json")
+        let chunk = job.appendingPathComponent("chunk-0.mp4"), journal = job.appendingPathComponent("journal.json")
+        let retained = [externalFile, source, metadata, chunk, journal]
+        for url in retained + [internalFile] { try Data(url.lastPathComponent.utf8).write(to: url) }
+        try ExportHistory.record(files: [internalFile], job: job, destination: nil)
+        try ExportHistory.record(files: [externalFile], job: job, destination: external)
+        try ExportHistory.removeInternalCompleted(jobsRoot: jobs, projectID: project.id)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: completed.path))
+        for url in retained { XCTAssertEqual(try Data(contentsOf: url), Data(url.lastPathComponent.utf8)) }
+        let remaining = try XCTUnwrap(ExportHistory.latest(jobsRoot: jobs, projectID: project.id))
+        XCTAssertTrue(remaining.files.contains { $0.resolvingSymlinksInPath().standardizedFileURL.path == externalFile.resolvingSymlinksInPath().standardizedFileURL.path })
+        XCTAssertFalse(remaining.files.contains(internalFile))
+
+        // A redirected Completed directory must never turn into an external removal target.
+        let redirectedID = UUID(), redirected = jobs.appendingPathComponent(redirectedID.uuidString).appendingPathComponent(String(repeating: "a", count: 64))
+        try FileManager.default.createDirectory(at: redirected, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: redirected.appendingPathComponent("Completed"), withDestinationURL: external)
+        XCTAssertThrowsError(try ExportHistory.removeInternalCompleted(jobsRoot: jobs, projectID: redirectedID))
+        XCTAssertEqual(try Data(contentsOf: externalFile), Data(externalFile.lastPathComponent.utf8))
+    }
     func testInterruptedAttemptDoesNotHideCommittedOutputs() throws {
         struct State: Encodable { var status: String; var startedAt: Date }
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -56,13 +87,23 @@ final class MediaExportTests: XCTestCase {
             XCTAssertEqual(CMFormatDescriptionGetExtension(description, extensionKey: kCMFormatDescriptionExtension_ColorPrimaries) as? String, AVVideoColorPrimaries_ITU_R_709_2)
             XCTAssertEqual(CMFormatDescriptionGetExtension(description, extensionKey: kCMFormatDescriptionExtension_TransferFunction) as? String, AVVideoTransferFunction_ITU_R_709_2)
             let expectedEnd = try XCTUnwrap(Timeline(project).chunks(rate: rate).last).end
-            let reader = try AVAssetReader(asset: asset), output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
+            // Count displayed images，not compressed packets that can include preroll/markers.
+            let reader = try AVAssetReader(asset: asset), output = AVAssetReaderTrackOutput(track: track, outputSettings: [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+            ])
+            output.alwaysCopiesSampleData = false
             reader.add(output); XCTAssertTrue(reader.startReading())
-            var frames = 0
+            var frames = 0, incorrectTimes = 0
+            var firstTimes: [Int64] = [], firstDurations: [Int64] = []
             while let sample = output.copyNextSampleBuffer() {
-                XCTAssertEqual(CMSampleBufferGetPresentationTimeStamp(sample).ticks, Int64(frames) * rate.frameTicks)
+                guard CMSampleBufferGetImageBuffer(sample) != nil else { continue }
+                let stamp = CMSampleBufferGetPresentationTimeStamp(sample).ticks
+                if stamp != Int64(frames) * rate.frameTicks { incorrectTimes += 1 }
+                if firstTimes.count < 4 { firstTimes.append(stamp); firstDurations.append(CMSampleBufferGetDuration(sample).ticks) }
                 frames += 1
             }
+            log("format result \(resolution.rawValue) \(rate.rawValue) frames=\(frames) expected=\(expectedEnd / rate.frameTicks) firstPTS=\(firstTimes) durations=\(firstDurations)")
+            XCTAssertEqual(incorrectTimes, 0, "Decoded frame timestamps differ: \(firstTimes)")
             XCTAssertEqual(reader.status, .completed)
             XCTAssertEqual(Int64(frames), expectedEnd / rate.frameTicks)
             let duration = try await asset.load(.duration)
@@ -101,6 +142,7 @@ final class MediaExportTests: XCTestCase {
         generator.maximumSize = CGSize(width: 32, height: 18)
         generator.requestedTimeToleranceBefore = .zero; generator.requestedTimeToleranceAfter = .zero
         let first = try centerColor(generator, frame: 6), fade = try centerColor(generator, frame: 82), last = try centerColor(generator, frame: 156)
+        log("sRGB samples first=\(first) fade=\(fade) last=\(last)")
         XCTAssertGreaterThan(first[0], 200); XCTAssertLessThan(first[2], 40)
         XCTAssertGreaterThan(fade[0], 60); XCTAssertGreaterThan(fade[2], 60); XCTAssertLessThan(fade[1], 40)
         XCTAssertGreaterThan(last[2], 200); XCTAssertLessThan(last[0], 40)
@@ -246,34 +288,43 @@ final class MediaExportTests: XCTestCase {
     func fixture(url: URL, frames: Int, red: Bool, transform: CGAffineTransform = .identity, quadrants: Bool = false) async throws {
         log("video fixture beginning")
         let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
-        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: 160, AVVideoHeightKey: 90])
+        defer { if writer.status == .writing { writer.cancelWriting() } }
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: 160, AVVideoHeightKey: 90,
+            AVVideoColorPropertiesKey: [AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
+                AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2, AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2]])
         input.transform = transform
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA, kCVPixelBufferWidthKey as String: 160, kCVPixelBufferHeightKey as String: 90
         ])
         writer.add(input); XCTAssertTrue(writer.startWriting()); writer.startSession(atSourceTime: .zero)
+        var still: CVPixelBuffer?
         for frame in 0..<frames {
             let deadline = Date().addingTimeInterval(120)
             while !input.isReadyForMoreMediaData {
                 guard writer.status == .writing, Date() < deadline else { throw writer.error ?? AppError.message("試験素材のエンコード待機がタイムアウトしました。") }
                 try await Task.sleep(nanoseconds: 10_000_000)
             }
-            var pixel: CVPixelBuffer?
-            CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, try XCTUnwrap(adaptor.pixelBufferPool), &pixel)
-            let buffer = try XCTUnwrap(pixel)
-            CVPixelBufferLockBaseAddress(buffer, [])
-            let pointer = CVPixelBufferGetBaseAddress(buffer)!.assumingMemoryBound(to: UInt8.self), stride = CVPixelBufferGetBytesPerRow(buffer)
-            for y in 0..<90 { for x in 0..<160 {
-                let p = pointer + y * stride + x * 4
-                if quadrants {
-                    p[0] = y >= 45 && x < 80 ? 255 : 0
-                    p[1] = x >= 80 ? 255 : 0
-                    p[2] = (y < 45 && x < 80) || (y >= 45 && x >= 80) ? 255 : 0
-                } else { p[0] = red ? 0 : 255; p[1] = 0; p[2] = red ? 255 : 0 }
-                p[3] = 255
-            } }
-            CVPixelBufferUnlockBaseAddress(buffer, [])
-            XCTAssertTrue(adaptor.append(buffer, withPresentationTime: CMTime(value: Int64(frame), timescale: 30)))
+            if still == nil {
+                var pixel: CVPixelBuffer?
+                CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, try XCTUnwrap(adaptor.pixelBufferPool), &pixel)
+                let buffer = try XCTUnwrap(pixel)
+                CVPixelBufferLockBaseAddress(buffer, [])
+                let pointer = CVPixelBufferGetBaseAddress(buffer)!.assumingMemoryBound(to: UInt8.self), stride = CVPixelBufferGetBytesPerRow(buffer)
+                for y in 0..<90 { for x in 0..<160 {
+                    let p = pointer + y * stride + x * 4
+                    if quadrants {
+                        p[0] = y >= 45 && x < 80 ? 255 : 0
+                        p[1] = x >= 80 ? 255 : 0
+                        p[2] = (y < 45 && x < 80) || (y >= 45 && x >= 80) ? 255 : 0
+                    } else { p[0] = red ? 0 : 255; p[1] = 0; p[2] = red ? 255 : 0 }
+                    p[3] = 255
+                } }
+                CVPixelBufferUnlockBaseAddress(buffer, [])
+                // Every fixture frame has identical pixels. Keep this buffer immutable
+                // rather than allocating and painting it again for every timestamp.
+                still = buffer; log("video fixture pixels prepared")
+            }
+            XCTAssertTrue(adaptor.append(try XCTUnwrap(still), withPresentationTime: CMTime(value: Int64(frame), timescale: 30)))
         }
         input.markAsFinished(); writer.endSession(atSourceTime: CMTime(value: Int64(frames), timescale: 30))
         log("video fixture waiting for writer finish")
@@ -293,7 +344,7 @@ final class MediaExportTests: XCTestCase {
         var rgba = [UInt8](repeating: 0, count: 4)
         let drawn = rgba.withUnsafeMutableBytes { bytes -> Bool in
             guard let context = CGContext(data: bytes.baseAddress, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
-                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue) else { return false }
+                space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue) else { return false }
             context.draw(pixel, in: CGRect(x: 0, y: 0, width: 1, height: 1)); return true
         }
         XCTAssertTrue(drawn)

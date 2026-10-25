@@ -86,8 +86,13 @@ enum CompositionBuilder {
                 .concatenating(CGAffineTransform(scaleX: scale, y: scale))
                 .concatenating(CGAffineTransform(translationX: (size.width - abs(bounds.width) * scale) / 2,
                                                y: (size.height - abs(bounds.height) * scale) / 2))
+            // Track transforms use video coordinates with the origin at the top left.
+            // Core Image uses the bottom left，so convert both coordinate systems.
+            let coreTransform = CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: natural.height)
+                .concatenating(transform)
+                .concatenating(CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: size.height))
             if segment.isBandHead { bandStart = segment.start; bandName = segment.clip.bandName }
-            layers.append(RenderLayer(trackID: videos[index].trackID, transform: transform, bandName: bandName,
+            layers.append(RenderLayer(trackID: videos[index].trackID, transform: coreTransform, bandName: bandName,
                                       bandStart: bandStart, clipStart: segment.start, fadeIn: segment.incoming))
         }
         let boundaries = Array(Set(timeline.segments.flatMap { [$0.start, $0.end] })).sorted()

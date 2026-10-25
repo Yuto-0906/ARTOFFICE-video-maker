@@ -27,6 +27,19 @@ workflows:
       - ios/build/*.log
       - ios/build/*.txt
       - ios/build/*.xcresult
+  ios-storage-check:
+    name: ARTOFFICE storage checks
+    instance_type: mac_mini_m2
+    max_build_duration: 30
+    environment:
+      xcode: '27.1'
+    scripts:
+      - name: Verify completed-output cleanup and recovery
+        script: bash scripts/ios/ci.sh check storage
+    artifacts:
+      - ios/build/*.log
+      - ios/build/*.txt
+      - ios/build/*.xcresult
   ios-device:
     name: ARTOFFICE registered-device IPA
     instance_type: mac_mini_m2

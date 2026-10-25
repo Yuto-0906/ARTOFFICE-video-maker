@@ -26,10 +26,13 @@ if [[ "${1:-check}" == check ]]; then
   case "${2:-all}" in
     all) ;;
     media) TEST_SELECTION=(-only-testing:ARTOFFICETests/MediaExportTests/testShortRelinkIsRejectedBeforeCopyingMedia
+                           -only-testing:ARTOFFICETests/MediaExportTests/testCompletedCleanupPreservesSourcesChunksAndExternalFiles
                            -only-testing:ARTOFFICETests/MediaExportTests/testOutputFormatsPreserveFrameCountAndRate
                            -only-testing:ARTOFFICETests/MediaExportTests/testInterruptedAttemptDoesNotHideCommittedOutputs
                            -only-testing:ARTOFFICETests/MediaExportTests/testRotationMatchesAVFoundationReference
                            -only-testing:ARTOFFICETests/MediaExportTests/testChunkedExportMuxAndReuse) ;;
+    storage) TEST_SELECTION=(-only-testing:ARTOFFICETests/MediaExportTests/testCompletedCleanupPreservesSourcesChunksAndExternalFiles
+                             -only-testing:ARTOFFICETests/MediaExportTests/testInterruptedAttemptDoesNotHideCommittedOutputs) ;;
     *) echo 'Unknown test selection' >&2; exit 2 ;;
   esac
   echo 'Running model and persistence tests'
@@ -88,5 +91,5 @@ PY
 elif [[ "${1:-}" == device ]]; then
   python3 scripts/ios/sign.py
 else
-  echo 'Usage: ci.sh check [all|media]|device' >&2; exit 2
+  echo 'Usage: ci.sh check [all|media|storage]|device' >&2; exit 2
 fi

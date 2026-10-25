@@ -34,6 +34,38 @@ enum ExportHistory {
         var status: String?
         var startedAt: Date?
     }
+    static func removeInternalCompleted(jobsRoot: URL, projectID: UUID) throws {
+        let project = jobsRoot.appendingPathComponent(projectID.uuidString)
+        guard FileManager.default.fileExists(atPath: project.path) else { return }
+        let base = jobsRoot.resolvingSymlinksInPath().standardizedFileURL.path
+        guard project.resolvingSymlinksInPath().standardizedFileURL.path == base + "/" + projectID.uuidString else {
+            throw AppError.message("完成ファイルの保存場所を確認できません。削除を中止しました。")
+        }
+        var directories: [URL] = [], receipts: [URL] = []
+        let entries = try FileManager.default.contentsOfDirectory(at: project, includingPropertiesForKeys: [.isDirectoryKey])
+        // Validate every target before removing any files. Source media lives in Projects，
+        // while external destinations are never used as removal targets.
+        for job in entries where job.lastPathComponent.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil {
+            guard (try? job.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { continue }
+            let expected = base + "/" + projectID.uuidString + "/" + job.lastPathComponent
+            guard job.resolvingSymlinksInPath().standardizedFileURL.path == expected else {
+                throw AppError.message("完成ファイルの保存場所を確認できません。削除を中止しました。")
+            }
+            let completed = job.appendingPathComponent("Completed")
+            if FileManager.default.fileExists(atPath: completed.path) {
+                guard completed.resolvingSymlinksInPath().standardizedFileURL.path == expected + "/Completed" else {
+                    throw AppError.message("完成ファイルの保存場所を確認できません。削除を中止しました。")
+                }
+                directories.append(completed)
+            }
+            for url in try FileManager.default.contentsOfDirectory(at: job, includingPropertiesForKeys: nil)
+                where url.lastPathComponent.hasPrefix("result-") && url.pathExtension == "json" {
+                if let data = try? Data(contentsOf: url), let record = try? JSONDecoder().decode(CompletedExport.self, from: data),
+                   record.hasSafeNames, record.destinationBookmark == nil { receipts.append(url) }
+            }
+        }
+        for url in directories + receipts { try FileManager.default.removeItem(at: url) }
+    }
     static func attempt(jobsRoot: URL, project: Project, completed: Loaded?) -> Attempt {
         guard let key = try? ExportEngine.key(project) else { return Attempt(report: nil, unfinished: false) }
         let job = jobsRoot.appendingPathComponent(project.id.uuidString).appendingPathComponent(key)

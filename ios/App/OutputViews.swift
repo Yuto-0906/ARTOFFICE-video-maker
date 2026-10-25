@@ -84,6 +84,7 @@ struct ExportView: View {
     @State private var sharing = false
     @State private var shareURLs: [URL] = []
     @State private var cleanup = false
+    @State private var cleanCompleted = false
     var body: some View {
         Form {
             Section("画質") {
@@ -127,7 +128,8 @@ struct ExportView: View {
                 }
             }
             Section("容量と診断") {
-                Button("処理済み区間を削除", role: .destructive) { cleanup = true }.disabled(store.exporting)
+                Button("処理済み区間を削除", role: .destructive) { cleanCompleted = false; cleanup = true }.disabled(store.exporting || store.busy)
+                Button("アプリ内の完成ファイルを削除", role: .destructive) { cleanCompleted = true; cleanup = true }.disabled(store.exporting || store.busy)
                 if let report = store.diagnosticFile {
                     Button("直近の診断レポートを共有") { shareURLs = [report]; sharing = true }
                 }
@@ -152,10 +154,16 @@ struct ExportView: View {
             do { destination = try resolveDestination() }
             catch { store.message = "保存先のフォルダーを選び直してください。" }
         }
-        .alert("処理済み区間を削除しますか？", isPresented: $cleanup) {
-            Button("削除", role: .destructive) { Task { await store.clearExportCache() } }
+        .alert(cleanCompleted ? "アプリ内の完成ファイルを削除しますか？" : "処理済み区間を削除しますか？", isPresented: $cleanup) {
+            Button("削除", role: .destructive) {
+                Task { if cleanCompleted { await store.clearCompletedFiles() } else { await store.clearExportCache() } }
+            }
             Button("キャンセル", role: .cancel) {}
-        } message: { Text("編集情報と完成ファイルは残ります。次回の出力では全区間を処理し直します。") }
+        } message: {
+            Text(cleanCompleted
+                ? "このプロジェクトのアプリ内にある完成動画・チャプター・サムネイルを削除します。外部へ保存したコピーを確認してから実行してください。編集情報・素材・処理済み区間と外部の保存先は残ります。"
+                : "編集情報と完成ファイルは残ります。次回の出力では全区間を処理し直します。")
+        }
     }
     private var exportControls: some View {
         VStack(alignment: .leading, spacing: 8) {

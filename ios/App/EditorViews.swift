@@ -85,10 +85,12 @@ struct ImportView: View {
     @State private var copy = true
     @State private var photos: [PhotosPickerItem] = []
     @State private var relink: UUID?
+    @FocusState private var eventNameFocused: Bool
     var body: some View {
         List {
             Section("イベント") {
                 TextField("イベント名", text: $store.project.name).accessibilityIdentifier("eventName")
+                    .focused($eventNameFocused).submitLabel(.done).onSubmit { eventNameFocused = false }
                 LabeledContent("アプリ内の素材", value: ByteCountFormatter.string(fromByteCount: store.storageBytes, countStyle: .file))
             }
             Section {

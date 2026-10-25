@@ -42,7 +42,7 @@ struct ChunkReceipt: Codable {
     var range: ExportChunk
 }
 struct ExportJournal: Codable {
-    var rendererVersion = 3
+    var rendererVersion = 4
     var completed: [String: ChunkReceipt] = [:]
 }
 struct ChunkMeasurement: Codable {
@@ -79,7 +79,7 @@ enum ExportEngine {
     static func key(_ project: Project) throws -> String {
         struct Identity: Encodable { let version: Int; let clips: [Clip]; let resolution: Resolution; let frameRate: FrameRate }
         let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
-        let data = try encoder.encode(Identity(version: 3, clips: project.clips, resolution: project.resolution, frameRate: project.frameRate))
+        let data = try encoder.encode(Identity(version: 4, clips: project.clips, resolution: project.resolution, frameRate: project.frameRate))
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
     static func run(project: Project, directory: URL, jobsRoot: URL, destination: URL?, control: ExportControl, chunkSeconds: Int = 300,

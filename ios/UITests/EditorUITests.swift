@@ -19,18 +19,25 @@ import XCTest
         wait(for: [saved], timeout: 10)
         screenshot(app, name: "02-import")
         // iPadOS can present the tabs in its top toolbar rather than a TabBar.
-        let editTab = app.buttons["編集"]
-        XCTAssertTrue(editTab.waitForExistence(timeout: 15)); editTab.tap()
+        selectTab("編集", app: app)
         XCTAssertTrue(app.staticTexts["動画を追加してください"].waitForExistence(timeout: 5)); screenshot(app, name: "03-trim")
-        app.buttons["サムネイル"].tap()
+        selectTab("サムネイル", app: app)
         XCTAssertTrue(app.staticTexts["集合写真を16:9に切り抜く"].waitForExistence(timeout: 5)); screenshot(app, name: "04-thumbnail")
-        app.buttons["書き出し"].tap()
+        selectTab("書き出し", app: app)
         XCTAssertTrue(app.buttons["startExport"].waitForExistence(timeout: 5)); screenshot(app, name: "05-export")
         app.terminate(); app.launch()
         let project = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Live UI Test")).firstMatch
         XCTAssertTrue(project.waitForExistence(timeout: 15)); project.tap()
         XCTAssertTrue(name.waitForExistence(timeout: 10))
         XCTAssertEqual(name.value as? String, "Live UI Test")
+    }
+    private func selectTab(_ title: String, app: XCUIApplication) {
+        let matches = app.buttons.matching(NSPredicate(format: "label == %@", title))
+        XCTAssertTrue(matches.firstMatch.waitForExistence(timeout: 15))
+        guard let target = matches.allElementsBoundByIndex.first(where: { $0.isHittable }) else {
+            XCTFail("No visible tab named \(title)"); return
+        }
+        target.tap()
     }
     private func screenshot(_ app: XCUIApplication, name: String) {
         let attachment = XCTAttachment(screenshot: app.screenshot())

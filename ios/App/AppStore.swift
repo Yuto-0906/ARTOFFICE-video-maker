@@ -197,8 +197,22 @@ import SwiftUI
         // Deterministic checkpoints on iOS 17; never rely on an unlimited background assertion.
         if exporting { control?.cancel() }
     }
+    func clearCompletedFiles() async {
+        guard !exporting, !busy else { return }
+        busy = true; defer { busy = false }
+        let jobs = self.jobs, id = project.id
+        exportedFiles = []; outputLease = nil
+        do {
+            try await Task.detached { try ExportHistory.removeInternalCompleted(jobsRoot: jobs, projectID: id) }.value
+            exportStatus = "アプリ内の完成ファイルを削除しました。編集内容と素材は残っています。"
+            let finished = try await Task.detached { try ExportHistory.latest(jobsRoot: jobs, projectID: id) }.value
+            exportedFiles = finished?.files ?? []; outputLease = finished?.lease
+            diagnosticFile = ExportHistory.attempt(jobsRoot: jobs, project: project, completed: finished).report
+                ?? finished?.files.first(where: { $0.pathExtension == "json" })
+        } catch { message = error.localizedDescription }
+    }
     func clearExportCache() async {
-        guard !exporting else { return }
+        guard !exporting, !busy else { return }
         let directory = jobs.appendingPathComponent(project.id.uuidString)
         do {
             if FileManager.default.fileExists(atPath: directory.path) {
