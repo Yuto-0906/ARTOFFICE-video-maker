@@ -8,17 +8,18 @@ final class ExportControl: @unchecked Sendable {
     private let lock = NSLock()
     private var stopped = false
     private var reader: AVAssetReader?
-    private var writer: AVAssetWriter?
     private var session: AVAssetExportSession?
     private var wakeup: (@Sendable () -> Void)?
     var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return stopped }
     func attach(reader: AVAssetReader?, writer: AVAssetWriter?, session: AVAssetExportSession? = nil) {
-        lock.lock(); self.reader = reader; self.writer = writer; self.session = session; let cancelled = stopped; lock.unlock()
-        if cancelled { reader?.cancelReading(); writer?.cancelWriting(); session?.cancelExport() }
+        lock.lock(); self.reader = reader; self.session = session; let cancelled = stopped; lock.unlock()
+        if cancelled { reader?.cancelReading(); session?.cancelExport() }
     }
     func cancel() {
-        lock.lock(); stopped = true; let r = reader, w = writer, s = session, callback = wakeup; lock.unlock()
-        r?.cancelReading(); w?.cancelWriting(); s?.cancelExport()
+        lock.lock(); stopped = true; let r = reader, s = session, callback = wakeup; lock.unlock()
+        // The pump queues finish before cancelling the writer，avoiding concurrent
+        // markAsFinished/cancelWriting calls inside AVAssetWriter.
+        r?.cancelReading(); s?.cancelExport()
         callback?()
     }
     func setWakeup(_ callback: (@Sendable () -> Void)?) {
@@ -28,13 +29,20 @@ final class ExportControl: @unchecked Sendable {
     func check() throws { if isCancelled { throw CancellationError() }; try Task.checkCancellation() }
 }
 
+private final class PumpFailure: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: Error?
+    func record(_ error: Error) { lock.lock(); if stored == nil { stored = error }; lock.unlock() }
+    var error: Error? { lock.lock(); defer { lock.unlock() }; return stored }
+}
+
 struct ChunkReceipt: Codable {
     var byteCount: Int64
     var modifiedAt: Date?
     var range: ExportChunk
 }
 struct ExportJournal: Codable {
-    var rendererVersion = 1
+    var rendererVersion = 2
     var completed: [String: ChunkReceipt] = [:]
 }
 struct ChunkMeasurement: Codable {
@@ -52,6 +60,8 @@ struct ExportReport: Codable {
     var frameRate: String
     var encoder = "AVAssetWriter H.264; platform-selected encoder"
     var hardwareVerification = "Requires device profiling; simulator is not evidence"
+    var audioBitRate: Int = 0
+    var supportedAudioBitRates: [Int] = []
     var chunks: [ChunkMeasurement] = []
     var elapsedSeconds: Double = 0
     var finalizationSeconds: Double = 0
@@ -61,7 +71,7 @@ enum ExportEngine {
     static func key(_ project: Project) throws -> String {
         struct Identity: Encodable { let version: Int; let clips: [Clip]; let resolution: Resolution; let frameRate: FrameRate }
         let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
-        let data = try encoder.encode(Identity(version: 1, clips: project.clips, resolution: project.resolution, frameRate: project.frameRate))
+        let data = try encoder.encode(Identity(version: 2, clips: project.clips, resolution: project.resolution, frameRate: project.frameRate))
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
     static func run(project: Project, directory: URL, jobsRoot: URL, destination: URL?, control: ExportControl, chunkSeconds: Int = 300,
@@ -96,6 +106,9 @@ enum ExportEngine {
         let clock = Date()
         var report = ExportReport(budget: DeviceBudget.current(), systemVersion: UIDevice.current.systemVersion,
             metalDevice: MTLCreateSystemDefaultDevice()?.name ?? "unavailable", resolution: project.resolution.rawValue, frameRate: project.frameRate.rawValue)
+        let audioEncoding = try AudioEncoding.supported()
+        report.audioBitRate = audioEncoding.bitRate; report.supportedAudioBitRates = audioEncoding.supportedBitRates
+        print("ARTOFFICE AAC selected=\(audioEncoding.bitRate) supported=\(audioEncoding.supportedBitRates)")
         progress(0, "素材を確認しています")
         let composition = try await CompositionBuilder.build(project: project, directory: directory)
         // Keep security scopes alive across asynchronous reads and finalization.
@@ -113,7 +126,7 @@ enum ExportEngine {
             let start = Date()
             do {
                 try MediaFiles.requireSpace(max(250_000_000, Int64(Clock.seconds(chunk.duration) * Double(project.resolution.bitrate + 384_000) / 8 * 1.2)), at: job)
-                try await writeChunk(composition: composition, chunk: chunk, project: project, url: partial, control: control) { ticks in
+                try await writeChunk(composition: composition, chunk: chunk, project: project, audioEncoding: audioEncoding, url: partial, control: control) { ticks in
                     progress(Double(min(chunk.end, ticks)) / Double(timeline.duration) * 0.94, "動画を書き出しています（\(chunk.index + 1)/\(chunks.count)）")
                 }
                 try control.check()
@@ -146,11 +159,14 @@ enum ExportEngine {
             try FileManager.default.moveItem(at: partial, to: final); generated.append(final)
             try timeline.chapters.write(to: chapters, atomically: true, encoding: .utf8); generated.append(chapters)
             if let crop = project.thumbnail { try MediaFiles.exportPhoto(crop, directory: directory, output: photo); generated.append(photo) }
+            try ExportHistory.record(files: generated, job: job, destination: destination)
             report.elapsedSeconds = Date().timeIntervalSince(clock); report.finalizationSeconds = Date().timeIntervalSince(finalizeStart)
             let reportURL = job.appendingPathComponent("performance.json")
-            try JSONEncoder().encode(report).write(to: reportURL, options: .atomic)
+            // Once all output files and their receipt are committed，a diagnostic write
+            // failure must not remove the user's five-hour completed video.
+            let reportSaved = (try? JSONEncoder().encode(report).write(to: reportURL, options: .atomic)) != nil
             progress(1, "書き出しが完了しました")
-            return generated + [reportURL]
+            return generated + (reportSaved ? [reportURL] : [])
         } catch {
             try? FileManager.default.removeItem(at: partial)
             for url in generated { try? FileManager.default.removeItem(at: url) }
@@ -173,7 +189,7 @@ enum ExportEngine {
               abs(Double(fps) - project.frameRate.value) < 0.05,
               abs(duration.seconds - Clock.seconds(chunk.duration)) < 0.1 else { throw AppError.message("出力区間の形式または長さが一致しません。") }
     }
-    static func writeChunk(composition: RenderComposition, chunk: ExportChunk, project: Project, url: URL,
+    static func writeChunk(composition: RenderComposition, chunk: ExportChunk, project: Project, audioEncoding: AudioEncoding, url: URL,
                            control: ExportControl, progress: @escaping @Sendable (Int64) -> Void) async throws {
         let reader = try AVAssetReader(asset: composition.asset)
         reader.timeRange = CMTimeRange(start: CMTime(ticks: chunk.start), duration: CMTime(ticks: chunk.duration))
@@ -206,15 +222,21 @@ enum ExportEngine {
         ]
         guard writer.canApply(outputSettings: videoSettings, forMediaType: .video) else { throw AppError.message("この端末では選択した画質で出力できません。") }
         let vInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
-        let aInput = AVAssetWriterInput(mediaType: .audio, outputSettings: [AVFormatIDKey: kAudioFormatMPEG4AAC,
-            AVSampleRateKey: 48_000, AVNumberOfChannelsKey: 2, AVEncoderBitRateKey: 384_000])
+        guard writer.canApply(outputSettings: audioEncoding.settings, forMediaType: .audio) else {
+            throw AppError.message("AAC音声の出力設定を適用できません。")
+        }
+        let aInput = AVAssetWriterInput(mediaType: .audio, outputSettings: audioEncoding.settings)
         vInput.expectsMediaDataInRealTime = false; aInput.expectsMediaDataInRealTime = false
         guard writer.canAdd(vInput), writer.canAdd(aInput) else { throw AppError.message("動画・音声の出力設定を適用できません。") }
         writer.add(vInput); writer.add(aInput); control.attach(reader: reader, writer: writer)
-        defer { control.setWakeup(nil); control.attach(reader: nil, writer: nil) }
+        defer {
+            control.setWakeup(nil); control.attach(reader: nil, writer: nil)
+            if writer.status == .writing { writer.cancelWriting() }
+        }
+        try control.check()
         guard writer.startWriting() else { throw writer.error ?? AppError.message("書込みを開始できません。") }
         writer.startSession(atSourceTime: CMTime(ticks: chunk.start))
-        guard reader.startReading() else { throw reader.error ?? AppError.message("読込みを開始できません。") }
+        guard reader.startReading() else { try control.check(); throw reader.error ?? AppError.message("読込みを開始できません。") }
         let audioPump = try AudioPump(output: audioOutput, chunk: chunk)
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let group = DispatchGroup(); group.enter(); group.enter()
@@ -222,21 +244,35 @@ enum ExportEngine {
             let aQueue = DispatchQueue(label: "artoffice.encode.audio", qos: .userInitiated)
             var vFinished = false, aFinished = false
             var lastUpdate = Date.distantPast
+            let failure = PumpFailure()
             // Cancellation may stop readiness callbacks. Wake both queues explicitly so the
             // continuation cannot hang waiting for callbacks from a cancelled writer.
-            control.setWakeup {
+            let finishQueues: @Sendable () -> Void = {
                 vQueue.async { if !vFinished { vFinished = true; group.leave() } }
                 aQueue.async { if !aFinished { aFinished = true; group.leave() } }
             }
+            control.setWakeup(finishQueues)
+            // A failed writer can stop sending readiness callbacks altogether. Observe its
+            // terminal state independently，rather than waiting forever for another callback.
+            let monitor = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+            monitor.schedule(deadline: .now() + .milliseconds(200), repeating: .milliseconds(200))
+            monitor.setEventHandler {
+                if writer.status == .failed || reader.status == .failed {
+                    failure.record(writer.error ?? reader.error ?? AppError.message("動画の読込み・書込み処理が停止しました。"))
+                    reader.cancelReading(); finishQueues()
+                }
+            }
+            monitor.resume()
             vInput.requestMediaDataWhenReady(on: vQueue) {
                 guard !vFinished else { return }
                 while vInput.isReadyForMoreMediaData {
                     if control.isCancelled || reader.status == .failed || writer.status != .writing {
-                        vFinished = true; vInput.markAsFinished(); group.leave(); return
+                        vFinished = true; if writer.status == .writing { vInput.markAsFinished() }; group.leave(); return
                     }
                     let sample = autoreleasepool { videos.copyNextSampleBuffer() }
-                    guard let sample else { vFinished = true; vInput.markAsFinished(); group.leave(); return }
+                    guard let sample else { vFinished = true; if writer.status == .writing { vInput.markAsFinished() }; group.leave(); return }
                     guard vInput.append(sample) else {
+                        failure.record(writer.error ?? AppError.message("映像フレームを書き込めませんでした。"))
                         vFinished = true; reader.cancelReading(); group.leave()
                         aQueue.async { if !aFinished { aFinished = true; group.leave() } }; return
                     }
@@ -249,26 +285,28 @@ enum ExportEngine {
                 guard !aFinished else { return }
                 while aInput.isReadyForMoreMediaData {
                     if control.isCancelled || reader.status == .failed || writer.status != .writing {
-                        aFinished = true; aInput.markAsFinished(); group.leave(); return
+                        aFinished = true; if writer.status == .writing { aInput.markAsFinished() }; group.leave(); return
                     }
                     do {
                         guard let sample = try autoreleasepool(invoking: { try audioPump.next() }) else {
-                            aFinished = true; aInput.markAsFinished(); group.leave(); return
+                            aFinished = true; if writer.status == .writing { aInput.markAsFinished() }; group.leave(); return
                         }
                         guard aInput.append(sample) else {
+                            failure.record(writer.error ?? AppError.message("音声データを書き込めませんでした。"))
                             aFinished = true; reader.cancelReading(); group.leave()
                             vQueue.async { if !vFinished { vFinished = true; group.leave() } }; return
                         }
                     } catch {
-                        audioPump.error = error; aFinished = true; reader.cancelReading(); group.leave()
+                        failure.record(error); aFinished = true; reader.cancelReading(); group.leave()
                         vQueue.async { if !vFinished { vFinished = true; group.leave() } }; return
                     }
                 }
             }
             group.notify(queue: vQueue) {
+                monitor.cancel()
                 if control.isCancelled { writer.cancelWriting(); continuation.resume(throwing: CancellationError()); return }
-                if let error = audioPump.error ?? writer.error ?? reader.error {
-                    writer.cancelWriting(); continuation.resume(throwing: error); return
+                if let error = failure.error ?? writer.error ?? reader.error {
+                    if writer.status == .writing { writer.cancelWriting() }; continuation.resume(throwing: error); return
                 }
                 writer.endSession(atSourceTime: CMTime(ticks: chunk.end))
                 writer.finishWriting {
@@ -319,7 +357,6 @@ final class AudioPump {
     let description: CMAudioFormatDescription
     var pending: CMSampleBuffer?
     var exhausted = false
-    var error: Error?
     init(output: AVAssetReaderAudioMixOutput?, chunk: ExportChunk) throws {
         self.output = output
         cursor = CMTimeConvertScale(CMTime(ticks: chunk.start), timescale: 48_000, method: .roundHalfAwayFromZero).value

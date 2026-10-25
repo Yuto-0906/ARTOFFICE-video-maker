@@ -70,7 +70,7 @@ struct EditorView: View {
                     Button { Task { do { try await store.flush() } catch { store.message = error.localizedDescription } } } label: {
                         Label(store.saveStatus, systemImage: store.saveStatus == "保存済み" ? "checkmark.icloud" : "arrow.triangle.2.circlepath")
                             .font(.caption)
-                    }.disabled(store.busy)
+                    }.disabled(store.busy).accessibilityIdentifier("saveProject")
                 }
             }
             .overlay { if store.busy { ProgressView(store.importStatus.isEmpty ? "処理しています" : store.importStatus).padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16)) } }

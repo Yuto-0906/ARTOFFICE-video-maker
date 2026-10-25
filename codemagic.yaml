@@ -12,6 +12,7 @@ workflows:
       - ios/build/*.log
       - ios/build/*.txt
       - ios/build/*.xcresult
+      - ios/build/*-screenshots/**
       - ios/build/device/Build/Products/Debug-iphoneos/ARTOFFICE.app
   ios-device:
     name: ARTOFFICE registered-device IPA

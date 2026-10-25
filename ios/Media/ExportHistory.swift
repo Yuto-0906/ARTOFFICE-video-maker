@@ -1,0 +1,61 @@
+import Foundation
+
+final class FolderLease {
+    let url: URL
+    private let scoped: Bool
+    init(_ url: URL) { self.url = url; scoped = url.startAccessingSecurityScopedResource() }
+    deinit { if scoped { url.stopAccessingSecurityScopedResource() } }
+}
+
+struct CompletedExport: Codable {
+    var createdAt: Date
+    var fileNames: [String]
+    var destinationBookmark: Data?
+    var hasSafeNames: Bool {
+        !fileNames.isEmpty && fileNames.allSatisfy { name in
+            !name.isEmpty && !name.hasPrefix(".") && !name.contains("/") && !name.contains("\\")
+                && !name.contains(":") && ["mp4", "txt", "jpg"].contains((name as NSString).pathExtension)
+        }
+    }
+}
+
+enum ExportHistory {
+    struct Loaded {
+        var files: [URL]
+        var lease: FolderLease?
+    }
+    static func record(files: [URL], job: URL, destination: URL?) throws {
+        let bookmark = try destination?.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)
+        let record = CompletedExport(createdAt: Date(), fileNames: files.map(\.lastPathComponent), destinationBookmark: bookmark)
+        guard record.hasSafeNames else { throw AppError.message("完成ファイル名を記録できません。") }
+        try JSONEncoder().encode(record).write(to: job.appendingPathComponent("result-\(UUID().uuidString).json"), options: .atomic)
+    }
+    static func latest(jobsRoot: URL, projectID: UUID) throws -> Loaded? {
+        let project = jobsRoot.appendingPathComponent(projectID.uuidString)
+        guard FileManager.default.fileExists(atPath: project.path) else { return nil }
+        let jobs = try FileManager.default.contentsOfDirectory(at: project, includingPropertiesForKeys: [.isDirectoryKey])
+        var candidates: [(record: CompletedExport, job: URL)] = []
+        for job in jobs where (try? job.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+            for url in try FileManager.default.contentsOfDirectory(at: job, includingPropertiesForKeys: nil)
+                where url.lastPathComponent.hasPrefix("result-") && url.pathExtension == "json" {
+                if let data = try? Data(contentsOf: url), let record = try? JSONDecoder().decode(CompletedExport.self, from: data), record.hasSafeNames {
+                    candidates.append((record, job))
+                }
+            }
+        }
+        guard let last = candidates.max(by: { $0.record.createdAt < $1.record.createdAt }) else { return nil }
+        let directory: URL
+        var lease: FolderLease?
+        if let bookmark = last.record.destinationBookmark {
+            var stale = false
+            directory = try URL(resolvingBookmarkData: bookmark, options: .withoutUI, bookmarkDataIsStale: &stale)
+            lease = FolderLease(directory)
+        } else { directory = last.job.appendingPathComponent("Completed") }
+        let files = last.record.fileNames.map { directory.appendingPathComponent($0) }
+        guard files.allSatisfy({ FileManager.default.isReadableFile(atPath: $0.path) }) else {
+            throw AppError.message("前回の完成ファイルを開けません。外部の保存先を使った場合はドライブを接続してください。")
+        }
+        let report = last.job.appendingPathComponent("performance.json")
+        return Loaded(files: files + (FileManager.default.isReadableFile(atPath: report.path) ? [report] : []), lease: lease)
+    }
+}

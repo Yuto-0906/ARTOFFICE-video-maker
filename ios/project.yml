@@ -50,11 +50,22 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.yuto0906.artoffice-video-maker.ios.tests
         GENERATE_INFOPLIST_FILE: YES
+  ARTOFFICEUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [UITests]
+    dependencies:
+      - target: ARTOFFICE
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.yuto0906.artoffice-video-maker.ios.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: ARTOFFICE
 schemes:
   ARTOFFICE:
     build:
       targets:
         ARTOFFICE: all
     test:
-      targets: [ARTOFFICETests]
+      targets: [ARTOFFICETests, ARTOFFICEUITests]
       gatherCoverageData: true

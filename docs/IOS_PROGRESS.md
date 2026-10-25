@@ -50,8 +50,9 @@ Secretの値，秘密鍵，プロファイル，端末IDはGitやこの記録へ
 - Windowsで`python -m py_compile scripts/ios/sign.py`を実行し，Python構文の確認が通った。
 - Gitの差分書式チェックが通った。
 - Codemagicの初回検証では，Coreの8テストがすべて成功した。5時間の整数タイムライン・区間境界，保存世代の復旧，保存順序，複製後の素材保持などを対象とし，5時間分の動画エンコードを実施した結果ではない。
-- Apple SDKによるコンパイル：初回は素材読込みファイルのコンパイル段階で失敗した。修正と，エラー箇所を画面内ログへ確実に残す変更を加えて再検証する。
-- シミュレーターでのメディア処理実行：実機ターゲットのコンパイルが通った後に実施する。
+- Apple SDKによるコンパイル：2回目の検証で実機ターゲットの署名なしビルドが成功した。
+- シミュレーターでのメディア処理実行：2回目は出力開始時に音声エンコーダーが設定を受け付けず失敗した。AACの384kbps固定をやめ，同じPCM形式で作成した`AVAudioConverter`の利用可能ビットレートから384kbps以下の最大値を選ぶ処理へ変更した。再検証前であり，原因が解消したとはまだ判断しない。
+- 完成品の再表示，素材を1本取り込むごとの保存，エンコーダー異常時の待機終了，iPhone・iPadの画面遷移と再起動後の保存内容を確認するUIテストを追加した。
 - 署名済みIPA，実機導入，5時間規模の両実機計測：未実施。
 
 以降のビルド結果では，対象コミットとビルドURLをセットで追記する。前回の自動承認レビューの利用上限によって未適用だった修正は，現在のファイルを読み直して適用した。
@@ -59,3 +60,6 @@ Secretの値，秘密鍵，プロファイル，端末IDはGitやこの記録へ
 | ビルド | コミット | 結果と検証範囲 |
 |---|---|---|
 | [Codemagic #1](https://codemagic.io/app/6adb7fa259debc2d2f15db9f/build/6add447e4a72334e32e4dd77) | `adcdae4` | Coreの8テスト成功，iOS実機ターゲットのコンパイルで失敗。所要1分5秒。署名・実機動作は未検証 |
+| [Codemagic #2](https://codemagic.io/app/6adb7fa259debc2d2f15db9f/build/6add461d4a72334e32e4ddb8) | `963e165` | 実機ターゲットの署名なしビルド成功。iPhoneシミュレーターの中止前状態テスト成功，動画出力は`AVFoundationErrorDomain -11861`・`AudioCodecInitialize failed`で失敗。iPad試験へは未到達。全体14分29秒，テストの失敗後に診断収集の600秒タイムアウトが発生 |
+
+AAC設定の照会方法は[AppleのapplicableEncodeBitRatesの説明](https://developer.apple.com/documentation/avfaudio/avaudioconverter/applicableencodebitrates)を参照した。容量見積りは最大384kbpsを維持し，実際に選ばれた値を診断レポートへ残す。

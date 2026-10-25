@@ -23,10 +23,16 @@ import SwiftUI
     private var saveTask: Task<Void, Never>?
     private var exportTask: Task<Void, Never>?
     private var control: ExportControl?
+    private var outputLease: FolderLease?
     private var revision = 0
     init() {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        var support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("ARTOFFICE", isDirectory: true)
+        #if DEBUG
+        if let seed = ProcessInfo.processInfo.environment["ARTOFFICE_UI_TEST_ROOT"], let id = UUID(uuidString: seed) {
+            support = FileManager.default.temporaryDirectory.appendingPathComponent("ARTOFFICE-UI-" + id.uuidString)
+        }
+        #endif
         root = support.appendingPathComponent("Projects", isDirectory: true)
         jobs = support.appendingPathComponent("ExportJobs", isDirectory: true)
         repository = ProjectRepository(root: root)
@@ -37,7 +43,7 @@ import SwiftUI
     var timeline: Timeline? { try? Timeline(project) }
     func refresh() async { projects = await repository.list() }
     func create() async {
-        do { let fresh = Project(); try await repository.save(fresh); project = fresh; active = true; exportedFiles = [] }
+        do { let fresh = Project(); try await repository.save(fresh); project = fresh; active = true; exportedFiles = []; outputLease = nil }
         catch { message = error.localizedDescription }
     }
     func open(_ project: Project) async {
@@ -46,10 +52,15 @@ import SwiftUI
             self.project = loaded.project; active = true; exportedFiles = []; saveStatus = "保存済み"
             storageBytes = await repository.allocatedBytes(project.id)
             if loaded.recovered { message = "直前の正常な保存データから復旧しました。内容を確認してください。" }
+            let jobs = self.jobs
+            do {
+                let finished = try await Task.detached { try ExportHistory.latest(jobsRoot: jobs, projectID: project.id) }.value
+                exportedFiles = finished?.files ?? []; outputLease = finished?.lease
+            } catch { message = error.localizedDescription }
         } catch { message = error.localizedDescription }
     }
     func close() async {
-        do { try await flush(); active = false; await refresh() }
+        do { try await flush(); active = false; outputLease = nil; await refresh() }
         catch { message = "保存できなかったため，編集画面を開いたままにしています。\n" + error.localizedDescription }
     }
     func changed() {
@@ -72,7 +83,8 @@ import SwiftUI
         guard active else { return }
         saveTask?.cancel(); revision += 1
         var snapshot = project; snapshot.modifiedAt = Date()
-        try await repository.save(snapshot, revision: revision); saveStatus = "保存済み"
+        do { try await repository.save(snapshot, revision: revision); saveStatus = "保存済み" }
+        catch { saveStatus = "保存失敗"; throw error }
     }
     func duplicate(_ value: Project) async {
         guard !busy else { return }; busy = true; defer { busy = false }
@@ -90,11 +102,15 @@ import SwiftUI
         guard !busy, !exporting else { return }
         busy = true; defer { busy = false; importStatus = "" }
         let directory = self.directory
-        var added: [Clip] = [], errors: [String] = []
-        for (index, url) in urls.enumerated() {
+        var errors: [String] = []
+        let ordered = urls.sorted {
+            let a = Naming.parse($0.lastPathComponent)?.order ?? Int.max, b = Naming.parse($1.lastPathComponent)?.order ?? Int.max
+            return a == b ? $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending : a < b
+        }
+        for (index, url) in ordered.enumerated() {
             importStatus = "動画を取り込んでいます（\(index + 1)/\(urls.count)）"
             do {
-                let existing: Set<String> = relink == nil ? Set((project.clips + added).compactMap(\.source.importIdentity)) : []
+                let existing: Set<String> = relink == nil ? Set(project.clips.compactMap(\.source.importIdentity)) : []
                 let clip = try await Task.detached(priority: .userInitiated) {
                     try await MediaFiles.importVideo(url, copy: copy, directory: directory, ownedTemporary: ownedTemporary,
                                                     selectionIdentity: selectionIdentity, existingIDs: existing)
@@ -102,16 +118,15 @@ import SwiftUI
                 if let id = relink, let i = project.clips.firstIndex(where: { $0.id == id }) {
                     guard clip.source.duration >= project.clips[i].end else { throw AppError.message("元のカット範囲より短い動画です。対応する素材を選んでください。") }
                     project.clips[i].source = clip.source
-                } else { added.append(clip) }
+                } else {
+                    if project.clips.isEmpty { project.frameRate = .suggested(clip.source.nominalFPS); project.selectedClip = clip.id }
+                    project.clips.append(clip)
+                }
+                // Commit after each file，so a later multi-gigabyte copy cannot erase the
+                // already imported clips if the app is interrupted.
+                try await flush()
             } catch { errors.append("\(url.lastPathComponent)：\(error.localizedDescription)") }
         }
-        added.sort {
-            let a = Naming.parse($0.source.fileName)?.order ?? Int.max, b = Naming.parse($1.source.fileName)?.order ?? Int.max
-            return a == b ? $0.source.fileName.localizedStandardCompare($1.source.fileName) == .orderedAscending : a < b
-        }
-        let wasEmpty = project.clips.isEmpty
-        project.clips += added
-        if wasEmpty, let first = added.first { project.frameRate = .suggested(first.source.nominalFPS); project.selectedClip = first.id }
         do { try await flush(); storageBytes = await repository.allocatedBytes(project.id) } catch { errors.append(error.localizedDescription) }
         if !errors.isEmpty { message = errors.joined(separator: "\n") }
     }
@@ -141,6 +156,7 @@ import SwiftUI
     func startExport(destination: URL?) {
         guard !exporting, !busy else { return }
         let snapshot = project, directory = self.directory, jobs = self.jobs
+        outputLease = destination.map { FolderLease($0) }
         let control = ExportControl(); self.control = control
         exporting = true; progress = 0; exportedFiles = []
         exportStatus = "書き出しを準備しています"; UIApplication.shared.isIdleTimerDisabled = true

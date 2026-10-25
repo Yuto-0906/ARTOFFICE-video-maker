@@ -14,12 +14,15 @@ GENERATOR="$TASK_ROOT/ios/build/xcodegen/bin/xcodegen"
 "$GENERATOR" generate --spec ios/project.yml --project ios
 xcodebuild -version | tee ios/build/xcode-version.txt
 if [[ "${1:-check}" == check ]]; then
+  echo 'Running model and persistence tests'
   (cd ios && swift test) 2>&1 | tee ios/build/core-tests.log
+  echo 'Building the physical-device target without signing'
   xcodebuild -project ios/ARTOFFICE.xcodeproj -scheme ARTOFFICE -configuration Debug \
     -destination 'generic/platform=iOS' -derivedDataPath ios/build/device CODE_SIGNING_ALLOWED=NO build \
     > ios/build/device-build.log 2>&1 || { grep -n -A 5 -B 2 -E 'error:|fatal error:|BUILD FAILED' ios/build/device-build.log || true; tail -n 35 ios/build/device-build.log; exit 1; }
   xcrun simctl list devices available --json > ios/build/simulators.json
   for FAMILY in iPhone iPad; do
+    echo "Running media and UI tests on $FAMILY"
     DEVICE_ID="$(python3 - "$FAMILY" <<'PY'
 import json, sys
 with open('ios/build/simulators.json') as source:
@@ -32,8 +35,13 @@ PY
 )"
     xcodebuild -project ios/ARTOFFICE.xcodeproj -scheme ARTOFFICE -configuration Debug \
       -destination "platform=iOS Simulator,id=$DEVICE_ID" -derivedDataPath ios/build/simulator \
+      -parallel-testing-enabled NO -test-timeouts-enabled YES \
+      -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 240 \
       -resultBundlePath "ios/build/${FAMILY}.xcresult" CODE_SIGNING_ALLOWED=NO test \
-      > "ios/build/${FAMILY}-tests.log" 2>&1 || { grep -n -A 5 -B 2 -E 'error:|failed|TEST FAILED' "ios/build/${FAMILY}-tests.log" || true; tail -n 45 "ios/build/${FAMILY}-tests.log"; exit 1; }
+      2>&1 | tee "ios/build/${FAMILY}-tests.log" | awk '/Test Case|Test Suite|ARTOFFICE AAC|error:|failed|TEST FAILED|TEST SUCCEEDED/ { print; fflush() }' \
+      || { grep -n -A 5 -B 2 -E 'error:|failed|TEST FAILED' "ios/build/${FAMILY}-tests.log" || true; tail -n 45 "ios/build/${FAMILY}-tests.log"; exit 1; }
+    xcrun xcresulttool export attachments --path "ios/build/${FAMILY}.xcresult" --output-path "ios/build/${FAMILY}-screenshots"
+    echo "$FAMILY tests passed"
   done
 elif [[ "${1:-}" == device ]]; then
   python3 scripts/ios/sign.py

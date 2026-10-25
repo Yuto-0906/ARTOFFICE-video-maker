@@ -4,6 +4,7 @@ import XCTest
 
 final class MediaExportTests: XCTestCase {
     func testChunkedExportMuxAndReuse() async throws {
+        executionTimeAllowance = 180
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let directory = root.appendingPathComponent("project"), media = directory.appendingPathComponent("Media")
@@ -28,6 +29,8 @@ final class MediaExportTests: XCTestCase {
         XCTAssertEqual(size, CGSize(width: 1920, height: 1080))
         let text = try String(contentsOf: XCTUnwrap(files.first { $0.pathExtension == "txt" }), encoding: .utf8)
         XCTAssertEqual(text, "0:00:00 日本語バンド\n0:00:02 次のバンド\n")
+        let restored = try XCTUnwrap(ExportHistory.latest(jobsRoot: jobs, projectID: project.id))
+        XCTAssertTrue(restored.files.contains(output))
         let reader = try AVAssetReader(asset: asset)
         let audioTracks = try await asset.loadTracks(withMediaType: .audio)
         let audio = AVAssetReaderTrackOutput(track: try XCTUnwrap(audioTracks.first), outputSettings: [AVFormatIDKey: kAudioFormatLinearPCM])
@@ -69,7 +72,11 @@ final class MediaExportTests: XCTestCase {
         ])
         writer.add(input); XCTAssertTrue(writer.startWriting()); writer.startSession(atSourceTime: .zero)
         for frame in 0..<frames {
-            while !input.isReadyForMoreMediaData { try await Task.sleep(nanoseconds: 1_000_000) }
+            let deadline = Date().addingTimeInterval(30)
+            while !input.isReadyForMoreMediaData {
+                guard writer.status == .writing, Date() < deadline else { throw writer.error ?? AppError.message("試験素材のエンコード待機がタイムアウトしました。") }
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
             var pixel: CVPixelBuffer?
             CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, try XCTUnwrap(adaptor.pixelBufferPool), &pixel)
             let buffer = try XCTUnwrap(pixel)
