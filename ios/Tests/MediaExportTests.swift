@@ -4,7 +4,8 @@ import XCTest
 
 final class MediaExportTests: XCTestCase {
     func testChunkedExportMuxAndReuse() async throws {
-        executionTimeAllowance = 180
+        log("tone export beginning")
+        executionTimeAllowance = 600
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let directory = root.appendingPathComponent("project"), media = directory.appendingPathComponent("Media")
@@ -12,6 +13,7 @@ final class MediaExportTests: XCTestCase {
         let red = media.appendingPathComponent("red.mov"), blue = media.appendingPathComponent("blue.mov")
         try await toneFixture(url: red, red: true, frequency: 440)
         try await toneFixture(url: blue, red: false, frequency: 880)
+        log("tone fixtures completed")
         var project = Project(); project.name = "日本語のライブ"
         let a = try await MediaFiles.probe(red, relativePath: "Media/red.mov", bookmark: nil)
         let b = try await MediaFiles.probe(blue, relativePath: "Media/blue.mov", bookmark: nil)
@@ -83,7 +85,8 @@ final class MediaExportTests: XCTestCase {
         XCTAssertNotEqual(try ExportEngine.key(p), key)
     }
     func testCancellationWhileEncodingRetainsSavedProject() async throws {
-        executionTimeAllowance = 30
+        executionTimeAllowance = 600
+        log("active cancellation beginning")
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let repository = ProjectRepository(root: root)
@@ -92,14 +95,19 @@ final class MediaExportTests: XCTestCase {
         try FileManager.default.createDirectory(at: media, withIntermediateDirectories: true)
         let url = media.appendingPathComponent("cancel.mp4")
         try await fixture(url: url, frames: 90, red: true)
+        log("cancellation fixture completed")
         let source = try await MediaFiles.probe(url, relativePath: "Media/cancel.mp4", bookmark: nil)
         project.clips = [Clip(source: source, bandName: "中断の試験")]
         try await repository.save(project)
+        log("cancellation project saved; building composition")
         let composition = try await CompositionBuilder.build(project: project, directory: directory)
+        log("cancellation composition completed")
+        let audioEncoding = try AudioEncoding.supported()
+        log("cancellation audio settings selected")
         let control = ExportControl(), chunk = try XCTUnwrap(Timeline(project).chunks(rate: project.frameRate).first)
         do {
             try await ExportEngine.writeChunk(composition: composition, chunk: chunk, project: project,
-                audioEncoding: AudioEncoding.supported(), url: directory.appendingPathComponent("cancel.partial.mp4"), control: control) { _ in
+                audioEncoding: audioEncoding, url: directory.appendingPathComponent("cancel.partial.mp4"), control: control) { _ in
                     control.cancel()
                 }
             XCTFail("An active export must report cancellation")
@@ -109,6 +117,7 @@ final class MediaExportTests: XCTestCase {
         XCTAssertTrue(FileManager.default.isReadableFile(atPath: url.path))
     }
     func fixture(url: URL, frames: Int, red: Bool) async throws {
+        log("video fixture beginning")
         let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
         let input = AVAssetWriterInput(mediaType: .video, outputSettings: [AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: 160, AVVideoHeightKey: 90])
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
@@ -131,8 +140,13 @@ final class MediaExportTests: XCTestCase {
             XCTAssertTrue(adaptor.append(buffer, withPresentationTime: CMTime(value: Int64(frame), timescale: 30)))
         }
         input.markAsFinished(); writer.endSession(atSourceTime: CMTime(value: Int64(frames), timescale: 30))
+        log("video fixture waiting for writer finish")
         await withCheckedContinuation { continuation in writer.finishWriting { continuation.resume() } }
+        log("video fixture finished status=\(writer.status.rawValue)")
         XCTAssertEqual(writer.status, .completed)
+    }
+    private func log(_ message: String) {
+        FileHandle.standardError.write(Data("ARTOFFICE test \(Date().timeIntervalSince1970) \(message)\n".utf8))
     }
     private func toneFixture(url: URL, red: Bool, frequency: Double) async throws {
         let videoURL = url.appendingPathExtension("video.mp4"), audioURL = url.appendingPathExtension("caf")

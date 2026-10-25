@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreImage
+import Darwin
 import Metal
 import UIKit
 
@@ -41,6 +42,7 @@ final class MetalCompositor: NSObject, AVVideoCompositing {
         capacity.lock(); capacity.broadcast(); capacity.unlock()
     }
     func startRequest(_ request: AVAsynchronousVideoCompositionRequest) {
+        trace("request", time: request.compositionTime)
         lock.lock(); let token = generation; lock.unlock()
         // Bound retained source and destination buffers before queueing GPU work. A hot
         // phone uses one frame; a cool iPad with sufficient memory can pipeline three.
@@ -57,6 +59,7 @@ final class MetalCompositor: NSObject, AVVideoCompositing {
                       let output = request.renderContext.newPixelBuffer() else {
                     request.finish(with: AppError.message("映像のGPU処理を開始できませんでした。")); return
                 }
+                trace("render beginning", time: request.compositionTime)
                 let rect = CGRect(origin: .zero, size: request.renderContext.size)
                 let black = CIImage(color: .black).cropped(to: rect)
                 let time = request.compositionTime.ticks
@@ -84,9 +87,17 @@ final class MetalCompositor: NSObject, AVVideoCompositing {
                     image = image.applyingFilter("CIDissolveTransition", parameters: [kCIInputTargetImageKey: images[1], kCIInputTimeKey: min(1, max(0, mix))])
                 }
                 context.render(image.cropped(to: rect), to: output, bounds: rect, colorSpace: colorspace)
+                trace("render finished", time: request.compositionTime)
                 request.finish(withComposedVideoFrame: output)
             }
         }
+    }
+    private func trace(_ message: String, time: CMTime) {
+        #if DEBUG
+        if time.ticks % Int64(Clock.scale) == 0 {
+            fputs("ARTOFFICE export Metal \(message) t=\(time.seconds)\n", stderr); fflush(stderr)
+        }
+        #endif
     }
     private func title(_ text: String, size: CGSize) -> CIImage {
         let key = "\(size.width):\(text)" as NSString

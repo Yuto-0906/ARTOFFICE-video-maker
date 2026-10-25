@@ -120,6 +120,8 @@ enum ExportEngine {
             // peak is labelled explicitly; sub-second memory spikes can be missed.
             try? JSONEncoder().encode(report).write(to: job.appendingPathComponent("performance.json"), options: .atomic)
         }
+        trace("renderer=\(report.metalDevice)")
+        progress(0, "音声の出力設定を確認しています")
         let audioEncoding = try AudioEncoding.supported()
         report.audioBitRate = audioEncoding.bitRate; report.supportedAudioBitRates = audioEncoding.supportedBitRates
         print("ARTOFFICE AAC selected=\(audioEncoding.bitRate) supported=\(audioEncoding.supportedBitRates)")
@@ -252,8 +254,10 @@ enum ExportEngine {
             if writer.status == .writing { writer.cancelWriting() }
         }
         try control.check()
+        trace("starting writer")
         guard writer.startWriting() else { throw writer.error ?? AppError.message("書込みを開始できません。") }
         writer.startSession(atSourceTime: CMTime(ticks: chunk.start))
+        trace("starting reader")
         guard reader.startReading() else { try control.check(); throw reader.error ?? AppError.message("読込みを開始できません。") }
         trace("reader started; audioTracks=\(audioTracks.count)")
         let audioPump = try AudioPump(output: audioOutput, chunk: chunk)
@@ -358,7 +362,7 @@ enum ExportEngine {
     }
     private static func trace(_ message: String) {
         #if DEBUG
-        print("ARTOFFICE export \(message)")
+        fputs("ARTOFFICE export \(message)\n", stderr); fflush(stderr)
         #endif
     }
     static func mux(chunks: [ExportChunk], job: URL, output: URL, control: ExportControl) async throws {

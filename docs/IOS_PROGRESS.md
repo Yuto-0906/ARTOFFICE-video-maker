@@ -62,7 +62,12 @@ Secretの値，秘密鍵，プロファイル，端末IDはGitやこの記録へ
 | [Codemagic #1](https://codemagic.io/app/6adb7fa259debc2d2f15db9f/build/6add447e4a72334e32e4dd77) | `adcdae4` | Coreの8テスト成功，iOS実機ターゲットのコンパイルで失敗。所要1分5秒。署名・実機動作は未検証 |
 | [Codemagic #2](https://codemagic.io/app/6adb7fa259debc2d2f15db9f/build/6add461d4a72334e32e4ddb8) | `963e165` | 実機ターゲットの署名なしビルド成功。iPhoneシミュレーターの中止前状態テスト成功，動画出力は`AVFoundationErrorDomain -11861`・`AudioCodecInitialize failed`で失敗。iPad試験へは未到達。全体14分29秒，テストの失敗後に診断収集の600秒タイムアウトが発生 |
 | [Codemagic #3](https://codemagic.io/app/6adb7fa259debc2d2f15db9f/build/6addb6384a72334e32e4ef76) | `1c1ad7f` | Coreの8テストと実機向けコンパイル成功。AACは320kbpsを選択し，初期化エラーは解消。動画出力テストは180秒の制限を超過。UIテストは書き出し操作の検索で失敗。失敗結果を確認後，診断収集の待機中に手動停止。全体10分29秒 |
+| [Codemagic #4](https://codemagic.io/app/6adb7fa259debc2d2f15db9f/build/6addb90b4a72334e32e4efe9) | `ead726c` | Coreの8テストと実機向けコンパイル成功。iPhone側で出力・音声境界・再利用・破損区間の再生成のアサーション成功，処理中の中止成功，4画面の遷移と再起動後の保存内容のアサーション成功。ただしメディア2件が時間上限を超過したため，ワークフロー全体は失敗。iPadへは未到達。全体17分32秒 |
 
 AAC設定の照会方法は[AppleのapplicableEncodeBitRatesの説明](https://developer.apple.com/documentation/avfaudio/avaudioconverter/applicableencodebitrates)を参照した。容量見積りは最大384kbpsを維持し，実際に選ばれた値を診断レポートへ残す。
 
 3回目の結果を受けて，出力段階・入力準備状態・最初のフレーム・処理時刻をDebugログへ追加した。次回は音の入った素材で区間境界を確認し，処理中の中止と保存内容の保持も検証する。設定一覧に埋もれていた書き出し・中断操作は画面下部へ固定した。メモリは1秒間隔で測定し，1分ごとの最大値と温度状態を記録する。測定値はサンプリングによる最大値であり，瞬間的なピークを保証しない。中断・失敗時にも診断記録を保存する。
+
+4回目では処理中の中止試験が約233秒，区間出力試験が約229秒，UI試験が約101秒で終了した。最初の映像が届くまでの待ち時間も確認されており，この試験環境の結果を実機の速度として扱わない。メディア試験の上限を600秒へ変更し，API呼出し前後とMetal処理のログを追加して内訳を確認する。音声の対応設定はプロセス内で再利用し，繰り返す出力で同じエンコーダー照会をやり直さない。CIはシミュレーターの起動状況を表示し，iPhone側の失敗時にも結果・画面を保存してiPad側を試験する構成へ変更する。
+
+経過時間の計測と，ユーザーが選択した外部素材のメタデータ確認に合わせてPrivacy Manifestも更新した。理由は[AppleのAPI利用理由](https://developer.apple.com/documentation/bundleresources/app-privacy-configuration/nsprivacyaccessedapitypes/nsprivacyaccessedapitype)に基づく。診断へ保存するのはアプリ内の経過時間であり，端末の起動時刻は保存しない。
