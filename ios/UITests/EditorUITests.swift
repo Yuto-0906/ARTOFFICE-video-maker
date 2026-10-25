@@ -23,7 +23,7 @@ import XCTest
         app.tabBars.buttons["サムネイル"].tap()
         XCTAssertTrue(app.staticTexts["集合写真を16:9に切り抜く"].waitForExistence(timeout: 5)); screenshot(app, name: "04-thumbnail")
         app.tabBars.buttons["書き出し"].tap()
-        XCTAssertTrue(app.buttons["書き出しを開始"].waitForExistence(timeout: 5)); screenshot(app, name: "05-export")
+        XCTAssertTrue(app.buttons["startExport"].waitForExistence(timeout: 5)); screenshot(app, name: "05-export")
         app.terminate(); app.launch()
         let project = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Live UI Test")).firstMatch
         XCTAssertTrue(project.waitForExistence(timeout: 15)); project.tap()

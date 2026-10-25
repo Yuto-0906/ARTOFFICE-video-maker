@@ -118,22 +118,6 @@ struct ExportView: View {
             } else {
                 Section { Text((try? invalidReason()) ?? "動画を追加してください。").foregroundStyle(.orange) }
             }
-            Section {
-                if store.exporting {
-                    ProgressView(value: store.progress)
-                    Text(store.exportStatus).font(.subheadline)
-                    Text("アプリを開いたままお待ちください。ほかのアプリへ移動すると中断し，完了した区間から次回にやり直せます。")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Button("中断する", role: .destructive) { store.cancelExport() }.frame(minHeight: 44)
-                } else {
-                    Button {
-                        do { store.startExport(destination: try resolveDestination()) }
-                        catch { store.message = "保存先へ再アクセスできません。フォルダーを選び直してください。" }
-                    } label: { Label("書き出しを開始", systemImage: "square.and.arrow.up").frame(maxWidth: .infinity, minHeight: 44) }
-                        .buttonStyle(.borderedProminent).disabled(store.project.clips.isEmpty || store.timeline == nil || store.busy)
-                    if !store.exportStatus.isEmpty { Text(store.exportStatus).font(.subheadline) }
-                }
-            }
             if !store.exportedFiles.isEmpty {
                 Section("完成ファイル") {
                     ForEach(store.exportedFiles.filter { $0.pathExtension != "json" }, id: \.path) { url in
@@ -148,6 +132,9 @@ struct ExportView: View {
                     Button("処理時間の診断レポートを共有") { shareURLs = [report]; sharing = true }
                 }
             }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            exportControls.padding(.horizontal, 16).padding(.vertical, 10).background(.regularMaterial)
         }
         .fileImporter(isPresented: $folderPicker, allowedContentTypes: [.folder], allowsMultipleSelection: false) { result in
             do {
@@ -169,6 +156,25 @@ struct ExportView: View {
             Button("削除", role: .destructive) { Task { await store.clearExportCache() } }
             Button("キャンセル", role: .cancel) {}
         } message: { Text("編集情報と完成ファイルは残ります。次回の出力では全区間を処理し直します。") }
+    }
+    private var exportControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if store.exporting {
+                ProgressView(value: store.progress)
+                Text(store.exportStatus).font(.subheadline)
+                Text("アプリを開いたままお待ちください。ほかのアプリへ移動すると中断し，完了した区間から次回にやり直せます。")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("中断する", role: .destructive) { store.cancelExport() }.frame(maxWidth: .infinity, minHeight: 44)
+            } else {
+                Button {
+                    do { store.startExport(destination: try resolveDestination()) }
+                    catch { store.message = "保存先へ再アクセスできません。フォルダーを選び直してください。" }
+                } label: { Label("書き出しを開始", systemImage: "square.and.arrow.up").frame(maxWidth: .infinity, minHeight: 44) }
+                    .buttonStyle(.borderedProminent).disabled(store.project.clips.isEmpty || store.timeline == nil || store.busy)
+                    .accessibilityIdentifier("startExport")
+                if !store.exportStatus.isEmpty { Text(store.exportStatus).font(.subheadline) }
+            }
+        }
     }
     func bytes(_ value: Int64) -> String { ByteCountFormatter.string(fromByteCount: value, countStyle: .file) }
     func invalidReason() throws -> String { do { _ = try Timeline(store.project); return "動画を追加してください。" } catch { return error.localizedDescription } }
