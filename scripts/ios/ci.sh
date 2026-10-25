@@ -44,7 +44,7 @@ PY
       -destination "platform=iOS Simulator,id=$DEVICE_ID" -derivedDataPath ios/build/simulator \
       -parallel-testing-enabled NO -test-timeouts-enabled YES \
       -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 240 \
-      "${TEST_DIAGNOSTICS[@]}" \
+      ${TEST_DIAGNOSTICS[@]+"${TEST_DIAGNOSTICS[@]}"} \
       -resultBundlePath "ios/build/${FAMILY}.xcresult" CODE_SIGNING_ALLOWED=NO test \
       2>&1 | tee "ios/build/${FAMILY}-tests.log" | awk '/Test Case|Test Suite|ARTOFFICE AAC|ARTOFFICE export|error:|failed|TEST FAILED|TEST SUCCEEDED/ { print; fflush() }' \
       || { grep -n -A 5 -B 2 -E 'error:|failed|TEST FAILED' "ios/build/${FAMILY}-tests.log" || true; tail -n 45 "ios/build/${FAMILY}-tests.log"; exit 1; }
