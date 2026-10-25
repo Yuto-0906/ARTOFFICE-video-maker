@@ -66,6 +66,7 @@ Secretの値，秘密鍵，プロファイル，端末IDはGitやこの記録へ
 | [Codemagic #3](https://codemagic.io/app/6adb7fa259debc2d2f15db9f/build/6addb6384a72334e32e4ef76) | `1c1ad7f` | Coreの8テストと実機向けコンパイル成功。AACは320kbpsを選択し，初期化エラーは解消。動画出力テストは180秒の制限を超過。UIテストは書き出し操作の検索で失敗。失敗結果を確認後，診断収集の待機中に手動停止。全体10分29秒 |
 | [Codemagic #4](https://codemagic.io/app/6adb7fa259debc2d2f15db9f/build/6addb90b4a72334e32e4efe9) | `ead726c` | Coreの8テストと実機向けコンパイル成功。iPhone側で出力・音声境界・再利用・破損区間の再生成のアサーション成功，処理中の中止成功，4画面の遷移と再起動後の保存内容のアサーション成功。ただしメディア2件が時間上限を超過したため，ワークフロー全体は失敗。iPadへは未到達。全体17分32秒 |
 | [Codemagic #5](https://codemagic.io/app/6adb7fa259debc2d2f15db9f/build/6addbdd64a72334e32e4f0d4) | `4c3a8cb` | Coreの8テスト，実機向けコンパイル成功。iPhone 17シミュレーターではメディア3件とUI1件が成功。iPad Air 13-inch (M4)シミュレーターでも音声付きの区間出力・音声境界・再利用・破損区間の再生成が成功。中止試験は素材生成の30秒待機上限，UI試験はTabBarに限定した検索で失敗。全体28分14秒，ワークフローは失敗 |
+| [Codemagic #6](https://codemagic.io/app/6adb7fa259debc2d2f15db9f/build/6addc75e4a72334e32e4f2f4) | `aa83404` | Coreの8テスト成功。MP4の時刻設定で`AVAssetExportSession`に存在しないプロパティを指定したため，実機向けコンパイルで失敗。設定を映像入力の`mediaTimeScale`に絞って修正する。全体1分20秒 |
 
 AAC設定の照会方法は[AppleのapplicableEncodeBitRatesの説明](https://developer.apple.com/documentation/avfaudio/avaudioconverter/applicableencodebitrates)を参照した。容量見積りは最大384kbpsを維持し，実際に選ばれた値を診断レポートへ残す。
 
@@ -79,7 +80,7 @@ AAC設定の照会方法は[AppleのapplicableEncodeBitRatesの説明](https://d
 
 出力形式の追加試験は，8通りの設定で実際の解像度・フレームレート・全フレームの時刻・フレーム数・末尾時刻を読み戻す。短い合成素材による機能試験であり，5時間素材の画質・速度や実機のハードウェア経路の確認には代用しない。
 
-出力動画のトラックとMP4の時刻単位は60,000へ明示的に設定する。対応する4フレームレートを整数で表し，5時間でも丸めを積み重ねないためである。形式の変更に合わせて処理方式のバージョンを3へ更新し，過去の区間ファイルを混在させない。音声には48kHzのサンプル時刻を使い，映像用の`mediaTimeScale`を音声入力へ設定しない。[AppleのmediaTimeScaleの説明](https://developer.apple.com/documentation/avfoundation/avassetwriterinput/mediatimescale)を参照した。
+出力動画の映像トラックの時刻単位は60,000へ明示的に設定する。対応する4フレームレートを整数で表し，5時間でも丸めを積み重ねないためである。MP4へ結合した後の時刻は出力試験で読み戻す。形式の変更に合わせて処理方式のバージョンを3へ更新し，過去の区間ファイルを混在させない。音声には48kHzのサンプル時刻を使い，映像用の`mediaTimeScale`を音声入力へ設定しない。[AppleのmediaTimeScaleの説明](https://developer.apple.com/documentation/avfoundation/avassetwriterinput/mediatimescale)を参照した。
 
 次回の検証では，初回の試験素材生成に実際に40秒程度かかった結果を踏まえ，試験素材の待機上限を120秒にする。製品の動画出力速度の基準を変更するものではない。UI試験はiPadの上部タブにも対応するよう，TabBar階層に依存せず操作を探す。回転情報付きの縦動画は，Apple標準の画像生成結果との比較で向きと余白を確認する。映像フェードの前後と途中の画素も読み戻す。
 

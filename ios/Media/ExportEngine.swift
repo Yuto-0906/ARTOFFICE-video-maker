@@ -392,7 +392,6 @@ enum ExportEngine {
         guard let session = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetPassthrough),
               session.supportedFileTypes.contains(.mp4) else { throw AppError.message("MP4への無変換結合を利用できません。") }
         session.outputURL = output; session.outputFileType = .mp4; session.shouldOptimizeForNetworkUse = true
-        session.movieTimeScale = outputVideoScale
         control.attach(reader: nil, writer: nil, session: session)
         defer { control.attach(reader: nil, writer: nil) }
         await withCheckedContinuation { continuation in session.exportAsynchronously { continuation.resume() } }
