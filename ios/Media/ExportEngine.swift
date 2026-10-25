@@ -42,7 +42,7 @@ struct ChunkReceipt: Codable {
     var range: ExportChunk
 }
 struct ExportJournal: Codable {
-    var rendererVersion = 2
+    var rendererVersion = 3
     var completed: [String: ChunkReceipt] = [:]
 }
 struct ChunkMeasurement: Codable {
@@ -53,6 +53,7 @@ struct ChunkMeasurement: Codable {
     var thermalState: Int
 }
 struct ExportReport: Codable {
+    var startedAt = Date()
     var budget: DeviceBudget
     var systemVersion: String
     var metalDevice: String
@@ -72,10 +73,13 @@ struct ExportReport: Codable {
 }
 
 enum ExportEngine {
+    // All four output frame rates have integral frame durations at 60 kHz.
+    // Five-hour movie durations also fit a 32-bit duration field at this scale.
+    private static let outputVideoScale: CMTimeScale = 60_000
     static func key(_ project: Project) throws -> String {
         struct Identity: Encodable { let version: Int; let clips: [Clip]; let resolution: Resolution; let frameRate: FrameRate }
         let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
-        let data = try encoder.encode(Identity(version: 2, clips: project.clips, resolution: project.resolution, frameRate: project.frameRate))
+        let data = try encoder.encode(Identity(version: 3, clips: project.clips, resolution: project.resolution, frameRate: project.frameRate))
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
     static func run(project: Project, directory: URL, jobsRoot: URL, destination: URL?, control: ExportControl, chunkSeconds: Int = 300,
@@ -120,11 +124,15 @@ enum ExportEngine {
             // peak is labelled explicitly; sub-second memory spikes can be missed.
             try? JSONEncoder().encode(report).write(to: job.appendingPathComponent("performance.json"), options: .atomic)
         }
+        try JSONEncoder().encode(report).write(to: job.appendingPathComponent("performance.json"), options: .atomic)
         trace("renderer=\(report.metalDevice)")
         progress(0, "音声の出力設定を確認しています")
         let audioEncoding = try AudioEncoding.supported()
         report.audioBitRate = audioEncoding.bitRate; report.supportedAudioBitRates = audioEncoding.supportedBitRates
         print("ARTOFFICE AAC selected=\(audioEncoding.bitRate) supported=\(audioEncoding.supportedBitRates)")
+        // Persist an attempt before reading frames，so relaunch can explain an OS kill
+        // even if the first chunk had not yet completed.
+        try JSONEncoder().encode(report).write(to: job.appendingPathComponent("performance.json"), options: .atomic)
         progress(0, "素材を確認しています")
         let composition = try await CompositionBuilder.build(project: project, directory: directory)
         // Keep security scopes alive across asynchronous reads and finalization.
@@ -157,6 +165,7 @@ enum ExportEngine {
                     elapsedSeconds: Date().timeIntervalSince(start), residentBytes: residentMemory(), thermalState: ProcessInfo.processInfo.thermalState.rawValue))
                 let sampled = sampler.snapshot()
                 report.peakSampledResidentBytes = sampled.peak; report.performanceWindows = sampled.windows
+                report.elapsedSeconds = Date().timeIntervalSince(clock)
                 try JSONEncoder().encode(report).write(to: job.appendingPathComponent("performance.json"), options: .atomic)
             } catch { try? FileManager.default.removeItem(at: partial); throw error }
         }
@@ -242,6 +251,7 @@ enum ExportEngine {
         ]
         guard writer.canApply(outputSettings: videoSettings, forMediaType: .video) else { throw AppError.message("この端末では選択した画質で出力できません。") }
         let vInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
+        vInput.mediaTimeScale = outputVideoScale
         guard writer.canApply(outputSettings: audioEncoding.settings, forMediaType: .audio) else {
             throw AppError.message("AAC音声の出力設定を適用できません。")
         }
@@ -382,6 +392,7 @@ enum ExportEngine {
         guard let session = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetPassthrough),
               session.supportedFileTypes.contains(.mp4) else { throw AppError.message("MP4への無変換結合を利用できません。") }
         session.outputURL = output; session.outputFileType = .mp4; session.shouldOptimizeForNetworkUse = true
+        session.movieTimeScale = outputVideoScale
         control.attach(reader: nil, writer: nil, session: session)
         defer { control.attach(reader: nil, writer: nil) }
         await withCheckedContinuation { continuation in session.exportAsynchronously { continuation.resume() } }

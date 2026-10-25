@@ -1,8 +1,76 @@
 import AVFoundation
+import CoreGraphics
 import XCTest
 @testable import ARTOFFICE
 
 final class MediaExportTests: XCTestCase {
+    func testInterruptedAttemptDoesNotHideCommittedOutputs() throws {
+        struct State: Encodable { var status: String; var startedAt: Date }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let project = Project(), job = root.appendingPathComponent(project.id.uuidString).appendingPathComponent(try ExportEngine.key(project))
+        let completedDirectory = job.appendingPathComponent("Completed"), report = job.appendingPathComponent("performance.json")
+        try FileManager.default.createDirectory(at: completedDirectory, withIntermediateDirectories: true)
+        var state = State(status: "running", startedAt: Date())
+        try JSONEncoder().encode(state).write(to: report)
+        var attempt = ExportHistory.attempt(jobsRoot: root, project: project, completed: nil)
+        XCTAssertTrue(attempt.unfinished); XCTAssertEqual(attempt.report, report)
+        let file = completedDirectory.appendingPathComponent("video.mp4")
+        try Data("receipt fixture".utf8).write(to: file)
+        try ExportHistory.record(files: [file], job: job, destination: nil)
+        let completed = try XCTUnwrap(ExportHistory.latest(jobsRoot: root, projectID: project.id))
+        attempt = ExportHistory.attempt(jobsRoot: root, project: project, completed: completed)
+        XCTAssertFalse(attempt.unfinished, "Committed files survive a missing final diagnostic update")
+        XCTAssertTrue(completed.files.contains(file))
+        state.startedAt = completed.createdAt.addingTimeInterval(1)
+        for status in ["running", "cancelled", "failed"] {
+            state.status = status; try JSONEncoder().encode(state).write(to: report)
+            XCTAssertTrue(ExportHistory.attempt(jobsRoot: root, project: project, completed: completed).unfinished)
+        }
+        state.status = "completed"; try JSONEncoder().encode(state).write(to: report)
+        XCTAssertFalse(ExportHistory.attempt(jobsRoot: root, project: project, completed: completed).unfinished)
+    }
+    func testOutputFormatsPreserveFrameCountAndRate() async throws {
+        executionTimeAllowance = 600
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let media = root.appendingPathComponent("Media")
+        try FileManager.default.createDirectory(at: media, withIntermediateDirectories: true)
+        let source = media.appendingPathComponent("formats.mp4")
+        try await fixture(url: source, frames: 36, red: true)
+        let metadata = try await MediaFiles.probe(source, relativePath: "Media/formats.mp4", bookmark: nil)
+        for resolution in Resolution.allCases { for rate in FrameRate.allCases {
+            var project = Project(); project.name = "Format \(resolution.rawValue) \(rate.rawValue)"
+            project.resolution = resolution; project.frameRate = rate
+            project.clips = [Clip(source: metadata, bandName: "形式の試験")]
+            log("format test \(resolution.rawValue) \(rate.rawValue)")
+            let files = try await ExportEngine.run(project: project, directory: root, jobsRoot: root.appendingPathComponent("jobs"),
+                destination: nil, control: ExportControl()) { _, _ in }
+            let asset = AVURLAsset(url: try XCTUnwrap(files.first(where: { $0.pathExtension == "mp4" })))
+            let tracks = try await asset.loadTracks(withMediaType: .video), track = try XCTUnwrap(tracks.first)
+            let size = try await track.load(.naturalSize), fps = try await track.load(.nominalFrameRate)
+            XCTAssertEqual(size, CGSize(width: resolution.width, height: resolution.height))
+            XCTAssertEqual(Double(fps), rate.value, accuracy: 0.02)
+            let descriptions = try await track.load(.formatDescriptions)
+            let description = try XCTUnwrap(descriptions.first)
+            XCTAssertEqual(CMFormatDescriptionGetExtension(description, extensionKey: kCMFormatDescriptionExtension_ColorPrimaries) as? String, AVVideoColorPrimaries_ITU_R_709_2)
+            XCTAssertEqual(CMFormatDescriptionGetExtension(description, extensionKey: kCMFormatDescriptionExtension_TransferFunction) as? String, AVVideoTransferFunction_ITU_R_709_2)
+            let expectedEnd = try XCTUnwrap(Timeline(project).chunks(rate: rate).last).end
+            let reader = try AVAssetReader(asset: asset), output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
+            reader.add(output); XCTAssertTrue(reader.startReading())
+            var frames = 0
+            while let sample = output.copyNextSampleBuffer() {
+                XCTAssertEqual(CMSampleBufferGetPresentationTimeStamp(sample).ticks, Int64(frames) * rate.frameTicks)
+                frames += 1
+            }
+            XCTAssertEqual(reader.status, .completed)
+            XCTAssertEqual(Int64(frames), expectedEnd / rate.frameTicks)
+            let duration = try await asset.load(.duration)
+            XCTAssertEqual(duration.seconds, Clock.seconds(expectedEnd), accuracy: Clock.seconds(rate.frameTicks))
+            // Keep the matrix's disk usage bounded，just as the production export keeps frame queues bounded.
+            try FileManager.default.removeItem(at: root.appendingPathComponent("jobs").appendingPathComponent(project.id.uuidString))
+        } }
+    }
     func testChunkedExportMuxAndReuse() async throws {
         log("tone export beginning")
         executionTimeAllowance = 600
@@ -29,6 +97,13 @@ final class MediaExportTests: XCTestCase {
         let video = try XCTUnwrap(videoTracks.first)
         let size = try await video.load(.naturalSize)
         XCTAssertEqual(size, CGSize(width: 1920, height: 1080))
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.maximumSize = CGSize(width: 32, height: 18)
+        generator.requestedTimeToleranceBefore = .zero; generator.requestedTimeToleranceAfter = .zero
+        let first = try centerColor(generator, frame: 6), fade = try centerColor(generator, frame: 82), last = try centerColor(generator, frame: 156)
+        XCTAssertGreaterThan(first[0], 200); XCTAssertLessThan(first[2], 40)
+        XCTAssertGreaterThan(fade[0], 60); XCTAssertGreaterThan(fade[2], 60); XCTAssertLessThan(fade[1], 40)
+        XCTAssertGreaterThan(last[2], 200); XCTAssertLessThan(last[0], 40)
         let text = try String(contentsOf: XCTUnwrap(files.first { $0.pathExtension == "txt" }), encoding: .utf8)
         XCTAssertEqual(text, "0:00:00 日本語バンド\n0:00:02 次のバンド\n")
         let restored = try XCTUnwrap(ExportHistory.latest(jobsRoot: jobs, projectID: project.id))
@@ -84,6 +159,43 @@ final class MediaExportTests: XCTestCase {
         p.resolution = .quadHD
         XCTAssertNotEqual(try ExportEngine.key(p), key)
     }
+    func testRotationMatchesAVFoundationReference() async throws {
+        executionTimeAllowance = 600
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let media = root.appendingPathComponent("Media")
+        try FileManager.default.createDirectory(at: media, withIntermediateDirectories: true)
+        let source = media.appendingPathComponent("rotation.mp4")
+        try await fixture(url: source, frames: 36, red: true,
+            transform: CGAffineTransform(a: 0, b: 1, c: -1, d: 0, tx: 90, ty: 0), quadrants: true)
+        var project = Project()
+        let metadata = try await MediaFiles.probe(source, relativePath: "Media/rotation.mp4", bookmark: nil)
+        project.clips = [Clip(source: metadata, bandName: "回転の試験")]
+        let files = try await ExportEngine.run(project: project, directory: root, jobsRoot: root.appendingPathComponent("jobs"),
+            destination: nil, control: ExportControl()) { _, _ in }
+        let referenceGenerator = AVAssetImageGenerator(asset: AVURLAsset(url: source))
+        referenceGenerator.appliesPreferredTrackTransform = true
+        let outputGenerator = AVAssetImageGenerator(asset: AVURLAsset(url: try XCTUnwrap(files.first(where: { $0.pathExtension == "mp4" }))))
+        outputGenerator.maximumSize = CGSize(width: 192, height: 108)
+        let time = CMTime(value: 6, timescale: 30)
+        let reference = try referenceGenerator.copyCGImage(at: time, actualTime: nil)
+        let output = try outputGenerator.copyCGImage(at: time, actualTime: nil)
+        XCTAssertLessThan(reference.width, reference.height)
+        let scale = min(CGFloat(output.width) / CGFloat(reference.width), CGFloat(output.height) / CGFloat(reference.height))
+        let left = (CGFloat(output.width) - CGFloat(reference.width) * scale) / 2
+        let top = (CGFloat(output.height) - CGFloat(reference.height) * scale) / 2
+        let points: [(CGFloat, CGFloat)] = [(0.25, 0.25), (0.75, 0.25), (0.25, 0.65), (0.75, 0.65)]
+        for (x, y) in points {
+            let expected = try pixelColor(reference, x: CGFloat(reference.width) * x, y: CGFloat(reference.height) * y)
+            let actual = try pixelColor(output, x: left + CGFloat(reference.width) * scale * x,
+                                        y: top + CGFloat(reference.height) * scale * y)
+            for channel in 0..<3 { XCTAssertLessThan(abs(Int(actual[channel]) - Int(expected[channel])), 35, "Rotated content differs at \(x)，\(y)") }
+        }
+        for x in [CGFloat(3), CGFloat(output.width - 4)] {
+            let black = try pixelColor(output, x: x, y: CGFloat(output.height) / 2)
+            XCTAssertTrue(black.prefix(3).allSatisfy { $0 < 20 }, "Portrait footage must preserve its aspect ratio")
+        }
+    }
     func testShortRelinkIsRejectedBeforeCopyingMedia() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -131,26 +243,35 @@ final class MediaExportTests: XCTestCase {
         XCTAssertEqual(saved.project, project)
         XCTAssertTrue(FileManager.default.isReadableFile(atPath: url.path))
     }
-    func fixture(url: URL, frames: Int, red: Bool) async throws {
+    func fixture(url: URL, frames: Int, red: Bool, transform: CGAffineTransform = .identity, quadrants: Bool = false) async throws {
         log("video fixture beginning")
         let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
         let input = AVAssetWriterInput(mediaType: .video, outputSettings: [AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: 160, AVVideoHeightKey: 90])
+        input.transform = transform
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA, kCVPixelBufferWidthKey as String: 160, kCVPixelBufferHeightKey as String: 90
         ])
         writer.add(input); XCTAssertTrue(writer.startWriting()); writer.startSession(atSourceTime: .zero)
         for frame in 0..<frames {
-            let deadline = Date().addingTimeInterval(30)
+            let deadline = Date().addingTimeInterval(120)
             while !input.isReadyForMoreMediaData {
                 guard writer.status == .writing, Date() < deadline else { throw writer.error ?? AppError.message("試験素材のエンコード待機がタイムアウトしました。") }
-                try await Task.sleep(nanoseconds: 1_000_000)
+                try await Task.sleep(nanoseconds: 10_000_000)
             }
             var pixel: CVPixelBuffer?
             CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, try XCTUnwrap(adaptor.pixelBufferPool), &pixel)
             let buffer = try XCTUnwrap(pixel)
             CVPixelBufferLockBaseAddress(buffer, [])
             let pointer = CVPixelBufferGetBaseAddress(buffer)!.assumingMemoryBound(to: UInt8.self), stride = CVPixelBufferGetBytesPerRow(buffer)
-            for y in 0..<90 { for x in 0..<160 { let p = pointer + y * stride + x * 4; p[0] = red ? 0 : 255; p[1] = 0; p[2] = red ? 255 : 0; p[3] = 255 } }
+            for y in 0..<90 { for x in 0..<160 {
+                let p = pointer + y * stride + x * 4
+                if quadrants {
+                    p[0] = y >= 45 && x < 80 ? 255 : 0
+                    p[1] = x >= 80 ? 255 : 0
+                    p[2] = (y < 45 && x < 80) || (y >= 45 && x >= 80) ? 255 : 0
+                } else { p[0] = red ? 0 : 255; p[1] = 0; p[2] = red ? 255 : 0 }
+                p[3] = 255
+            } }
             CVPixelBufferUnlockBaseAddress(buffer, [])
             XCTAssertTrue(adaptor.append(buffer, withPresentationTime: CMTime(value: Int64(frame), timescale: 30)))
         }
@@ -162,6 +283,21 @@ final class MediaExportTests: XCTestCase {
     }
     private func log(_ message: String) {
         FileHandle.standardError.write(Data("ARTOFFICE test \(Date().timeIntervalSince1970) \(message)\n".utf8))
+    }
+    private func centerColor(_ generator: AVAssetImageGenerator, frame: Int64) throws -> [UInt8] {
+        let image = try generator.copyCGImage(at: CMTime(value: frame, timescale: 30), actualTime: nil)
+        return try pixelColor(image, x: CGFloat(image.width / 2), y: CGFloat(image.height / 2))
+    }
+    private func pixelColor(_ image: CGImage, x: CGFloat, y: CGFloat) throws -> [UInt8] {
+        let pixel = try XCTUnwrap(image.cropping(to: CGRect(x: x.rounded(.down), y: y.rounded(.down), width: 1, height: 1)))
+        var rgba = [UInt8](repeating: 0, count: 4)
+        let drawn = rgba.withUnsafeMutableBytes { bytes -> Bool in
+            guard let context = CGContext(data: bytes.baseAddress, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue) else { return false }
+            context.draw(pixel, in: CGRect(x: 0, y: 0, width: 1, height: 1)); return true
+        }
+        XCTAssertTrue(drawn)
+        return rgba
     }
     private func toneFixture(url: URL, red: Bool, frequency: Double) async throws {
         let videoURL = url.appendingPathExtension("video.mp4"), audioURL = url.appendingPathExtension("caf")

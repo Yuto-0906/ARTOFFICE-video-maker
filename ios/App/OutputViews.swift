@@ -128,8 +128,8 @@ struct ExportView: View {
             }
             Section("容量と診断") {
                 Button("処理済み区間を削除", role: .destructive) { cleanup = true }.disabled(store.exporting)
-                if let report = store.exportedFiles.first(where: { $0.pathExtension == "json" }) {
-                    Button("処理時間の診断レポートを共有") { shareURLs = [report]; sharing = true }
+                if let report = store.diagnosticFile {
+                    Button("直近の診断レポートを共有") { shareURLs = [report]; sharing = true }
                 }
             }
         }

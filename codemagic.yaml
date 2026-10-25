@@ -14,15 +14,15 @@ workflows:
       - ios/build/*.xcresult
       - ios/build/*-screenshots/**
       - ios/build/device/Build/Products/Debug-iphoneos/ARTOFFICE.app
-  ios-import-check:
-    name: ARTOFFICE import validation
+  ios-media-check:
+    name: ARTOFFICE targeted media checks
     instance_type: mac_mini_m2
-    max_build_duration: 30
+    max_build_duration: 45
     environment:
       xcode: '27.1'
     scripts:
-      - name: Verify replacement files before copying
-        script: bash scripts/ios/ci.sh check import
+      - name: Verify import guards and output formats
+        script: bash scripts/ios/ci.sh check media
     artifacts:
       - ios/build/*.log
       - ios/build/*.txt

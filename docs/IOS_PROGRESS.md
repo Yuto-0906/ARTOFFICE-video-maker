@@ -37,7 +37,7 @@
 
 Codemagicで`codex/ios-native`の対象コミットを選び，`ios-check`を実行する。`scripts/ios/ci.sh check`はCoreのテスト，実機ターゲットの署名なしビルド，iPhone・iPadシミュレーターのメディア処理テストを順に実行し，`ios/build/`へログと結果を残す。
 
-取込み処理だけを変更した場合は，`ios-import-check`でCoreテスト，実機ターゲットのコンパイル，両シミュレーターの素材再選択テストを行える。動画出力・保存・画面の全体検証は`ios-check`で別に確認し，部分的な試験結果と混同しない。
+取込み処理と出力形式の追加検証には，`ios-media-check`を使える。Coreテスト，実機ターゲットのコンパイル，両シミュレーターの素材再選択テスト，1080p・1440p×4種類のフレームレート，区間出力・音声境界・再利用を確認する。保存・画面・中止操作を含む全体検証は`ios-check`で別に確認し，部分的な試験結果と混同しない。
 
 署名用の`ios-device`は，アプリ専用のプロファイルと利用可能なApple Development証明書を照合した後に実行する。`artoffice_ios_signing`グループで次のSecretを参照する。
 
@@ -65,6 +65,7 @@ Secretの値，秘密鍵，プロファイル，端末IDはGitやこの記録へ
 | [Codemagic #2](https://codemagic.io/app/6adb7fa259debc2d2f15db9f/build/6add461d4a72334e32e4ddb8) | `963e165` | 実機ターゲットの署名なしビルド成功。iPhoneシミュレーターの中止前状態テスト成功，動画出力は`AVFoundationErrorDomain -11861`・`AudioCodecInitialize failed`で失敗。iPad試験へは未到達。全体14分29秒，テストの失敗後に診断収集の600秒タイムアウトが発生 |
 | [Codemagic #3](https://codemagic.io/app/6adb7fa259debc2d2f15db9f/build/6addb6384a72334e32e4ef76) | `1c1ad7f` | Coreの8テストと実機向けコンパイル成功。AACは320kbpsを選択し，初期化エラーは解消。動画出力テストは180秒の制限を超過。UIテストは書き出し操作の検索で失敗。失敗結果を確認後，診断収集の待機中に手動停止。全体10分29秒 |
 | [Codemagic #4](https://codemagic.io/app/6adb7fa259debc2d2f15db9f/build/6addb90b4a72334e32e4efe9) | `ead726c` | Coreの8テストと実機向けコンパイル成功。iPhone側で出力・音声境界・再利用・破損区間の再生成のアサーション成功，処理中の中止成功，4画面の遷移と再起動後の保存内容のアサーション成功。ただしメディア2件が時間上限を超過したため，ワークフロー全体は失敗。iPadへは未到達。全体17分32秒 |
+| [Codemagic #5](https://codemagic.io/app/6adb7fa259debc2d2f15db9f/build/6addbdd64a72334e32e4f0d4) | `4c3a8cb` | Coreの8テスト，実機向けコンパイル成功。iPhone 17シミュレーターではメディア3件とUI1件が成功。iPad Air 13-inch (M4)シミュレーターでも音声付きの区間出力・音声境界・再利用・破損区間の再生成が成功。中止試験は素材生成の30秒待機上限，UI試験はTabBarに限定した検索で失敗。全体28分14秒，ワークフローは失敗 |
 
 AAC設定の照会方法は[AppleのapplicableEncodeBitRatesの説明](https://developer.apple.com/documentation/avfaudio/avaudioconverter/applicableencodebitrates)を参照した。容量見積りは最大384kbpsを維持し，実際に選ばれた値を診断レポートへ残す。
 
@@ -74,6 +75,14 @@ AAC設定の照会方法は[AppleのapplicableEncodeBitRatesの説明](https://d
 
 経過時間の計測と，ユーザーが選択した外部素材のメタデータ確認に合わせてPrivacy Manifestも更新した。理由は[AppleのAPI利用理由](https://developer.apple.com/documentation/bundleresources/app-privacy-configuration/nsprivacyaccessedapitypes/nsprivacyaccessedapitype)に基づく。診断へ保存するのはアプリ内の経過時間であり，端末の起動時刻は保存しない。
 
-大容量素材の再選択では，保存済みのカット範囲より短い動画をコピー前に拒否する処理を追加した。不適切な置換素材を数十GBコピーしてから失敗し，未使用ファイルが残ることを防ぐ。元ファイルとコピー先の状態を確認する回帰試験を追加し，`ios-import-check`で確認する。
+大容量素材の再選択では，保存済みのカット範囲より短い動画をコピー前に拒否する処理を追加した。不適切な置換素材を数十GBコピーしてから失敗し，未使用ファイルが残ることを防ぐ。元ファイルとコピー先の状態を確認する回帰試験を追加し，`ios-media-check`で確認する。
+
+出力形式の追加試験は，8通りの設定で実際の解像度・フレームレート・全フレームの時刻・フレーム数・末尾時刻を読み戻す。短い合成素材による機能試験であり，5時間素材の画質・速度や実機のハードウェア経路の確認には代用しない。
+
+出力動画のトラックとMP4の時刻単位は60,000へ明示的に設定する。対応する4フレームレートを整数で表し，5時間でも丸めを積み重ねないためである。形式の変更に合わせて処理方式のバージョンを3へ更新し，過去の区間ファイルを混在させない。音声には48kHzのサンプル時刻を使い，映像用の`mediaTimeScale`を音声入力へ設定しない。[AppleのmediaTimeScaleの説明](https://developer.apple.com/documentation/avfoundation/avassetwriterinput/mediatimescale)を参照した。
+
+次回の検証では，初回の試験素材生成に実際に40秒程度かかった結果を踏まえ，試験素材の待機上限を120秒にする。製品の動画出力速度の基準を変更するものではない。UI試験はiPadの上部タブにも対応するよう，TabBar階層に依存せず操作を探す。回転情報付きの縦動画は，Apple標準の画像生成結果との比較で向きと余白を確認する。映像フェードの前後と途中の画素も読み戻す。
+
+出力の開始状態を最初の区間より前に保存し，強制終了後に未完了の試行を案内する処理を追加した。最後の診断更新が中断しても，確定済みの完成品を未完了として扱わないことを試験する。失敗・中止した場合も，書き出し画面から直近の診断レポートを共有できる。共有シートで「写真」への保存を選ぶ場合に備え，追加専用の利用目的もInfo.plistへ設定した。
 
 今回のPC確認ではApple Mobile Device Serviceは稼働していたが，接続中のiPhone・iPadは検出されなかった。Apple Developerもサインインが必要な状態であり，ユーザーの希望によりログイン操作は後日行う。署名情報をCodemagicへ送信したり，端末へインストールしたりする段階には進んでいない。

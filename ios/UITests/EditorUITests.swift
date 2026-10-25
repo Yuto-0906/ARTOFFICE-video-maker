@@ -18,11 +18,13 @@ import XCTest
         let saved = expectation(for: NSPredicate(format: "label CONTAINS %@", "保存済み"), evaluatedWith: save)
         wait(for: [saved], timeout: 10)
         screenshot(app, name: "02-import")
-        app.tabBars.buttons["編集"].tap()
+        // iPadOS can present the tabs in its top toolbar rather than a TabBar.
+        let editTab = app.buttons["編集"]
+        XCTAssertTrue(editTab.waitForExistence(timeout: 15)); editTab.tap()
         XCTAssertTrue(app.staticTexts["動画を追加してください"].waitForExistence(timeout: 5)); screenshot(app, name: "03-trim")
-        app.tabBars.buttons["サムネイル"].tap()
+        app.buttons["サムネイル"].tap()
         XCTAssertTrue(app.staticTexts["集合写真を16:9に切り抜く"].waitForExistence(timeout: 5)); screenshot(app, name: "04-thumbnail")
-        app.tabBars.buttons["書き出し"].tap()
+        app.buttons["書き出し"].tap()
         XCTAssertTrue(app.buttons["startExport"].waitForExistence(timeout: 5)); screenshot(app, name: "05-export")
         app.terminate(); app.launch()
         let project = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Live UI Test")).firstMatch

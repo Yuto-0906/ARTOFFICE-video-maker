@@ -16,6 +16,7 @@ import SwiftUI
     @Published var progress = 0.0
     @Published var exportStatus = ""
     @Published var exportedFiles: [URL] = []
+    @Published private(set) var diagnosticFile: URL?
     @Published var storageBytes: Int64 = 0
     let root: URL
     let jobs: URL
@@ -43,24 +44,35 @@ import SwiftUI
     var timeline: Timeline? { try? Timeline(project) }
     func refresh() async { projects = await repository.list() }
     func create() async {
-        do { let fresh = Project(); try await repository.save(fresh); project = fresh; active = true; exportedFiles = []; outputLease = nil }
+        do {
+            let fresh = Project(); try await repository.save(fresh); project = fresh; active = true
+            exportedFiles = []; outputLease = nil; diagnosticFile = nil; exportStatus = ""
+        }
         catch { message = error.localizedDescription }
     }
     func open(_ project: Project) async {
         do {
             let loaded = try await repository.load(project.id)
             self.project = loaded.project; active = true; exportedFiles = []; saveStatus = "保存済み"
+            outputLease = nil; diagnosticFile = nil; exportStatus = ""
             storageBytes = await repository.allocatedBytes(project.id)
             if loaded.recovered { message = "直前の正常な保存データから復旧しました。内容を確認してください。" }
             let jobs = self.jobs
+            var completed: ExportHistory.Loaded?
             do {
                 let finished = try await Task.detached { try ExportHistory.latest(jobsRoot: jobs, projectID: project.id) }.value
+                completed = finished
                 exportedFiles = finished?.files ?? []; outputLease = finished?.lease
             } catch { message = error.localizedDescription }
+            let attempt = ExportHistory.attempt(jobsRoot: jobs, project: loaded.project, completed: completed)
+            diagnosticFile = attempt.report ?? completed?.files.first(where: { $0.pathExtension == "json" })
+            if attempt.unfinished {
+                exportStatus = "前回の書き出しは完了していません。保存した編集内容から再実行でき，処理済みの区間は再利用します。"
+            }
         } catch { message = error.localizedDescription }
     }
     func close() async {
-        do { try await flush(); active = false; outputLease = nil; await refresh() }
+        do { try await flush(); active = false; outputLease = nil; diagnosticFile = nil; await refresh() }
         catch { message = "保存できなかったため，編集画面を開いたままにしています。\n" + error.localizedDescription }
     }
     func changed() {
@@ -159,10 +171,13 @@ import SwiftUI
         let snapshot = project, directory = self.directory, jobs = self.jobs
         outputLease = destination.map { FolderLease($0) }
         let control = ExportControl(); self.control = control
-        exporting = true; progress = 0; exportedFiles = []
+        exporting = true; progress = 0; exportedFiles = []; diagnosticFile = nil
         exportStatus = "書き出しを準備しています"; UIApplication.shared.isIdleTimerDisabled = true
         exportTask = Task {
-            defer { exporting = false; UIApplication.shared.isIdleTimerDisabled = false; self.control = nil }
+            defer {
+                exporting = false; UIApplication.shared.isIdleTimerDisabled = false; self.control = nil
+                diagnosticFile = ExportHistory.attempt(jobsRoot: jobs, project: snapshot, completed: nil).report
+            }
             do {
                 try await flush()
                 let files = try await Task.detached(priority: .userInitiated) {

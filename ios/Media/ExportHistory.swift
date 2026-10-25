@@ -23,6 +23,30 @@ enum ExportHistory {
     struct Loaded {
         var files: [URL]
         var lease: FolderLease?
+        var job: URL
+        var createdAt: Date
+    }
+    struct Attempt {
+        var report: URL?
+        var unfinished: Bool
+    }
+    private struct AttemptSummary: Decodable {
+        var status: String?
+        var startedAt: Date?
+    }
+    static func attempt(jobsRoot: URL, project: Project, completed: Loaded?) -> Attempt {
+        guard let key = try? ExportEngine.key(project) else { return Attempt(report: nil, unfinished: false) }
+        let job = jobsRoot.appendingPathComponent(project.id.uuidString).appendingPathComponent(key)
+        let report = job.appendingPathComponent("performance.json")
+        guard FileManager.default.isReadableFile(atPath: report.path) else { return Attempt(report: nil, unfinished: false) }
+        guard let data = try? Data(contentsOf: report), let summary = try? JSONDecoder().decode(AttemptSummary.self, from: data) else {
+            return Attempt(report: report, unfinished: false)
+        }
+        // A committed result wins if writing the final diagnostic was interrupted.
+        let committed = completed.map { value in
+            value.job == job && summary.startedAt.map { value.createdAt >= $0 } == true
+        } ?? false
+        return Attempt(report: report, unfinished: !committed && ["running", "failed", "cancelled"].contains(summary.status ?? ""))
     }
     static func record(files: [URL], job: URL, destination: URL?) throws {
         let bookmark = try destination?.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)
@@ -56,6 +80,7 @@ enum ExportHistory {
             throw AppError.message("前回の完成ファイルを開けません。外部の保存先を使った場合はドライブを接続してください。")
         }
         let report = last.job.appendingPathComponent("performance.json")
-        return Loaded(files: files + (FileManager.default.isReadableFile(atPath: report.path) ? [report] : []), lease: lease)
+        return Loaded(files: files + (FileManager.default.isReadableFile(atPath: report.path) ? [report] : []),
+                      lease: lease, job: last.job, createdAt: last.record.createdAt)
     }
 }

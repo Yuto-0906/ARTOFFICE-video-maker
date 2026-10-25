@@ -22,6 +22,7 @@ targets:
       path: Info.plist
       properties:
         CFBundleDisplayName: ARTOFFICE
+        NSPhotoLibraryAddUsageDescription: 書き出した動画やサムネイルを「写真」に保存するために使用します。
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
         UIApplicationSupportsIndirectInputEvents: true
