@@ -6,6 +6,8 @@
 
 ユーザー申告のOSは27.0.1。実機への導入時に，機種・OS・空き容量を読み戻して記録する。短い合成動画の試験やシミュレーターの結果だけでは，5時間動画の処理性能を検証済みとしない。
 
+**検証範囲の変更：2026年10月26日，ユーザーから5時間規模の実素材試験は不要との指示を受けた。** 長時間対応の設計とモデル試験を維持し，実機受入は短い素材の読込み・編集・保存・出力・復旧を対象にする。5時間連続動作の測定は今回の完了条件に含めない。
+
 直近で全体が成功した検証は[Codemagic #8](https://codemagic.io/app/6adb7fa259debc2d2f15db9f/build/6addd4984a72334e32e4f5aa)，ソースは`0a56f0a`である。Coreの8件，iPhone・iPadそれぞれのメディア8件とUI1件，合計26件が成功している。実機ターゲットの署名なしビルドも成功した。署名済みIPA・実機起動・5時間の動画処理は未実施であり，計画全体の完了には至っていない。
 
 2026年10月26日追記：変更区間だけの再生成，仕上がりプレビュー，保存先の単一ファイル上限の照会を追加した。[Codemagic #12](https://codemagic.io/app/6adb7fa259debc2d2f15db9f/build/6adf01734a72334e32e53d47)，ソース`2879f43`ではCore13件，両シミュレーターのメディア11件ずつ，iPadのUI1件が成功した。iPhoneのUI試験は保存前の名前入力が期待値に一致せず，全体は失敗した。修正した`68603e8`を[UI専用検証 #1](https://codemagic.io/app/6adb7fa259debc2d2f15db9f/build/6adf592a4a72334e32e559f0)へ送信しており，現在は実行待ちである。部分的な成功を全体成功と扱わない。
@@ -29,7 +31,11 @@ Codemagic #9のiPhone側ではメディア9件が成功したが，UI試験は�
 
 Apple Developerの既存認証が有効であることを確認し，同じチームのApple Development証明書と対応する秘密鍵を照合した。証明書の期限は2027年10月16日03:53 UTCである。ユーザーからApp ID・両端末用プロファイルの登録と，P12・復号パスワード・端末ID入りプロファイルをCodemagicの`artoffice_ios_signing`へ送信する明示的な承認を得た。
 
-App ID `com.yuto0906.artoffice-video-maker.ios`と`ARTOFFICE iPhone iPad Development 2026-10-26`を作成した。プロファイルの期限は2027年10月26日13:51:55 UTC。CMSの検査後にアプリ識別子・チーム・開発用権限・証明書・2台の登録・接続中のiPadの包含を確認した。署名が使える期間は証明書側の期限にも制約される。秘密ファイルはGit除外済みの`.secrets/`，端末照会の原本は`.cache/`へ保存し，値はこの記録に含めない。Codemagicへの登録，署名ビルド，実機へのインストールはこれから行う。
+App ID `com.yuto0906.artoffice-video-maker.ios`と`ARTOFFICE iPhone iPad Development 2026-10-26`を作成した。プロファイルの期限は2027年10月26日13:51:55 UTC。CMSの検査後にアプリ識別子・チーム・開発用権限・証明書・2台の登録・接続中のiPadの包含を確認した。署名が使える期間は証明書側の期限にも制約される。秘密ファイルはGit除外済みの`.secrets/`，端末照会の原本は`.cache/`へ保存し，値はこの記録に含めない。
+
+承認済みのP12・パスワード・プロファイルを，Codemagicのこのアプリ専用`artoffice_ios_signing`へ3種類ともSecretとして登録し，値が表示されないことを確認した。送信用の一時ファイルは削除した。[署名ビルド #1](https://codemagic.io/app/6adb7fa259debc2d2f15db9f/build/6adf5daf4a72334e32e55b94)，対象`b3dc4d9`を送信済みで，現在は実行待ちである。UI専用検証とは別のワークフローである。IPA取得・構成検査・インストールは未実施。接続中のiPadではDeveloper Modeが有効であることを読み戻した。
+
+Windowsで使うIPA構成検査を`scripts/ios/check-ipa.py`へ配置し，Pythonの構文検査が通った。IPAの実物を検査した結果ではない。導入・上書き再導入・読み戻しの手順は[IOS_INSTALL_WINDOWS.md](IOS_INSTALL_WINDOWS.md)へまとめた。
 
 ## ソースとビルド環境
 
@@ -54,7 +60,7 @@ App ID `com.yuto0906.artoffice-video-maker.ios`と`ARTOFFICE iPhone iPad Develop
 | チャプター・サムネイル・完成品の保存 | テキスト・JPEG出力と共有画面を追加 | 切抜き位置の一致，完成品の再表示，選択した保存先への書込み |
 | Codemagic | `ios-check`の全体検証が成功。ログ・画面の添付・署名なしアプリを成果物として保存 | 署名ワークフローの実行とIPAの検査 |
 | 署名・実機導入 | 開発用の手動署名スクリプトを追加 | 証明書・プロファイルの照合，IPA検証，Windowsからの導入，実機起動 |
-| 5時間規模の受入試験 | メモリへ全編を保持しない処理と長時間タイムラインのテストを追加 | 代表素材による5時間規模の読込み・編集・出力・復旧を両実機で実施 |
+| 長時間対応の設計と受入試験 | メモリへ全編を保持しない処理と長時間タイムラインのモデル試験を追加 | 両実機では短い素材の読込み・編集・出力・復旧を確認する。ユーザー指示により5時間の実素材試験は今回省略 |
 
 ソースの追加は，実行時の動作確認を意味しない。上の検証が不足する間は，計画全体を完了としない。
 
@@ -99,6 +105,10 @@ Secretの値，秘密鍵，プロファイル，端末IDはGitやこの記録へ
 | [Codemagic #6](https://codemagic.io/app/6adb7fa259debc2d2f15db9f/build/6addc75e4a72334e32e4f2f4) | `aa83404` | Coreの8テスト成功。MP4の時刻設定で`AVAssetExportSession`に存在しないプロパティを指定したため，実機向けコンパイルで失敗。設定を映像入力の`mediaTimeScale`に絞って修正する。全体1分20秒 |
 | [Codemagic #7](https://codemagic.io/app/6adb7fa259debc2d2f15db9f/build/6addc91e4a72334e32e4f343) | `14a1dda` | Coreの8テストとアプリ・全テストのコンパイル成功。両シミュレーターで中止・中断記録・短すぎる素材の拒否が成功。回転の向きに不一致があり，フレーム数・画素比較・iPadの重複したタブ検索も追加試験で失敗。圧縮サンプルと表示フレームの区別，色比較用の色空間，座標変換を修正して再検証する。全体29分50秒 |
 | [Codemagic #8](https://codemagic.io/app/6adb7fa259debc2d2f15db9f/build/6addd4984a72334e32e4f5aa) | `0a56f0a` | **成功**。Core 8件，iPhone・iPadそれぞれメディア8件・UI1件の計26件と，実機ターゲットの署名なしビルドが成功。全体34分47秒。実機への導入と5時間の性能測定は未実施 |
+| [Codemagic #9](https://codemagic.io/app/6adb7fa259debc2d2f15db9f/build/6adef8754a72334e32e53b67) | `46a6782` | Core11件，iPhoneのメディア9件が成功。iPhoneのUI再起動試験で失敗し，修正版へ切り替えるためiPad側の試験途中に手動停止。全体24分56秒 |
+| [Codemagic #10](https://codemagic.io/app/6adb7fa259debc2d2f15db9f/build/6adefe824a72334e32e53c9d) | `c2f617c` | Core13件成功。ファイルシステム照会の戻り値の型推論で実機ターゲットのコンパイル失敗。全体1分53秒 |
+| [Codemagic #11](https://codemagic.io/app/6adb7fa259debc2d2f15db9f/build/6adeffca4a72334e32e53cef) | `eac7f77` | Core13件成功。`statfs`の名前解決でコンパイル失敗。フォルダーを開いて`fstatfs`・`fpathconf`で照会する方式へ修正。全体2分14秒 |
+| [Codemagic #12](https://codemagic.io/app/6adb7fa259debc2d2f15db9f/build/6adf01734a72334e32e53d47) | `2879f43` | Core13件，両画面のメディア11件ずつ，iPadのUI1件が成功。iPhoneのUIは名前の入力段階で失敗。全体20分2秒，ワークフローは失敗。仕上がりプレビュー・実ファイルシステム上限の照会・部分編集後の再利用は両画面で成功 |
 
 ## 修正の経緯と採用した設定
 
@@ -124,4 +134,4 @@ AAC設定の照会方法は[AppleのapplicableEncodeBitRatesの説明](https://d
 
 アプリ内の完成動画・チャプター・サムネイルを手動で削除する操作を追加した。編集情報・入力素材・確定済み区間を残し，外部の完成品と保存先は削除しない。削除対象はそのプロジェクトの内部保存領域へ限定し，操作前に確認を表示する。実機での容量整理と，新規エンコード・再利用を分けた計測手順は[IOS_DEVICE_ACCEPTANCE.md](IOS_DEVICE_ACCEPTANCE.md)へまとめた。実機での確認結果はまだ記入していない。
 
-今回のPC確認ではApple Mobile Device Serviceは稼働していたが，接続中のiPhone・iPadは検出されなかった。Apple Developerもサインインが必要な状態であり，ユーザーの希望によりログイン操作は後日行う。署名情報をCodemagicへ送信したり，端末へインストールしたりする段階には進んでいない。
+前回の確認時点ではApple Developerへのサインインと実機接続を待っていた。その後，既存認証の有効性，ユーザーによるiPadの接続，署名情報の照合・送信承認・CodemagicへのSecret登録まで進んだ。現状は上の「実機・署名の準備状況」を参照する。
