@@ -4,6 +4,44 @@ import XCTest
 @testable import ARTOFFICE
 
 final class MediaExportTests: XCTestCase {
+    @MainActor func testTimelinePreviewUsesTrimmedTimelineAndDeviceRenderSize() async throws {
+        executionTimeAllowance = 600
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let media = root.appendingPathComponent("Media")
+        try FileManager.default.createDirectory(at: media, withIntermediateDirectories: true)
+        let red = media.appendingPathComponent("red.mp4"), blue = media.appendingPathComponent("blue.mp4")
+        try await fixture(url: red, frames: 36, red: true)
+        try await fixture(url: blue, frames: 36, red: false)
+        var project = Project(); project.resolution = .quadHD
+        let a = try await MediaFiles.probe(red, relativePath: "Media/red.mp4", bookmark: nil)
+        let b = try await MediaFiles.probe(blue, relativePath: "Media/blue.mp4", bookmark: nil)
+        project.clips = [Clip(source: a, bandName: "冒頭のバンド"), Clip(source: b, bandName: "次のバンド")]
+        for i in project.clips.indices { project.clips[i].start = Clock.ticks(0.1); project.clips[i].end = Clock.ticks(1.1) }
+        let playback = TimelinePlayback()
+        defer { playback.stop() }
+        await playback.load(project: project, directory: root)
+        XCTAssertNil(playback.error); XCTAssertFalse(playback.loading)
+        XCTAssertEqual(playback.duration, 1.5, accuracy: 0.001)
+        let item = try XCTUnwrap(playback.player?.currentItem), video = try XCTUnwrap(item.videoComposition)
+        let height = Int(DeviceBudget.current().previewHeight)
+        XCTAssertEqual(video.renderSize, CGSize(width: height * 16 / 9, height: height))
+        XCTAssertEqual(project.resolution, .quadHD)
+        XCTAssertEqual(item.forwardPlaybackEndTime.ticks, Clock.ticks(1.5))
+        XCTAssertNotNil(item.audioMix)
+        let generator = AVAssetImageGenerator(asset: item.asset)
+        generator.videoComposition = video; generator.maximumSize = CGSize(width: 32, height: 18)
+        generator.requestedTimeToleranceBefore = .zero; generator.requestedTimeToleranceAfter = .zero
+        let first = try centerColor(generator, frame: 6), fade = try centerColor(generator, frame: 22), last = try centerColor(generator, frame: 42)
+        XCTAssertGreaterThan(first[0], 200); XCTAssertLessThan(first[2], 40)
+        XCTAssertGreaterThan(fade[0], 60); XCTAssertGreaterThan(fade[2], 60)
+        XCTAssertGreaterThan(last[2], 200); XCTAssertLessThan(last[0], 40)
+        playback.seek(-10); XCTAssertEqual(playback.current, 0)
+        playback.seek(100); XCTAssertLessThan(playback.current, playback.duration)
+        playback.stop(); XCTAssertNil(playback.player)
+        await playback.load(project: Project(), directory: root)
+        XCTAssertNotNil(playback.error); XCTAssertFalse(playback.loading); XCTAssertNil(playback.player)
+    }
     func testChunkReuseRejectsRedirectedAndInvalidCache() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

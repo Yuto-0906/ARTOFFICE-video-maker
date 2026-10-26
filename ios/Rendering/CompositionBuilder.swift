@@ -32,7 +32,7 @@ struct RenderComposition {
 }
 
 enum CompositionBuilder {
-    static func build(project: Project, directory: URL) async throws -> RenderComposition {
+    static func build(project: Project, directory: URL, previewHeight: Int? = nil) async throws -> RenderComposition {
         guard MTLCreateSystemDefaultDevice() != nil else { throw AppError.message("Metalによる映像処理を利用できません。") }
         let timeline = try Timeline(project)
         guard !timeline.segments.isEmpty else { throw AppError.message("動画を追加してください。") }
@@ -47,7 +47,11 @@ enum CompositionBuilder {
         let audioParameters = audios.map { AVMutableAudioMixInputParameters(track: $0) }
         var leases: [SourceLease] = [], layers: [RenderLayer] = []
         var bandStart: Int64 = 0, bandName = ""
-        let size = CGSize(width: project.resolution.width, height: project.resolution.height)
+        // Only the preview opts into a smaller render target. Export always uses
+        // the project's selected size and the same timing，fades and title logic.
+        let height = previewHeight.map { max(180, min(project.resolution.height, $0)) } ?? project.resolution.height
+        let size = previewHeight == nil ? CGSize(width: project.resolution.width, height: height)
+            : CGSize(width: height * 16 / 9, height: height)
         for segment in timeline.segments {
             try Task.checkCancellation()
             let lease = try SourceLease(source: segment.clip.source, projectDirectory: directory)

@@ -85,6 +85,7 @@ struct ExportView: View {
     @State private var shareURLs: [URL] = []
     @State private var cleanup = false
     @State private var cleanCompleted = false
+    @State private var preview = false
     var body: some View {
         Form {
             Section("画質") {
@@ -103,6 +104,8 @@ struct ExportView: View {
             if let timeline = store.timeline {
                 let capacity = CapacityEstimate(duration: timeline.duration, resolution: store.project.resolution, separateDestination: destination != nil)
                 Section("確認") {
+                    Button("仕上がりを確認", systemImage: "play.rectangle") { preview = true }
+                        .disabled(store.exporting || store.busy || store.project.clips.isEmpty)
                     LabeledContent("動画の長さ", value: Clock.text(timeline.duration))
                     LabeledContent("バンド数", value: "\(store.project.groups.count)組")
                     LabeledContent("完成動画の目安", value: bytes(capacity.output))
@@ -149,6 +152,7 @@ struct ExportView: View {
             } catch { store.message = error.localizedDescription }
         }
         .sheet(isPresented: $sharing) { ShareSheet(urls: shareURLs) }
+        .sheet(isPresented: $preview) { TimelinePreview(project: store.project, directory: store.directory) }
         .onAppear {
             destinationBookmark = store.project.destinationBookmark
             do { destination = try resolveDestination() }
