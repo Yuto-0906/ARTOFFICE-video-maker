@@ -7,12 +7,15 @@ enum OutputVolume {
     static func maximumFileSize(at directory: URL) -> Int64? {
         directory.withUnsafeFileSystemRepresentation { path -> Int64? in
             guard let path else { return nil }
+            let descriptor = open(path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+            guard descriptor >= 0 else { return nil }
+            defer { close(descriptor) }
             var volume = statfs()
-            guard Darwin.statfs(path, &volume) == 0 else { return nil }
+            guard fstatfs(descriptor, &volume) == 0 else { return nil }
             let name = withUnsafeBytes(of: volume.f_fstypename) { bytes in
                 String(decoding: bytes.prefix { $0 != 0 }, as: UTF8.self)
             }
-            return OutputFileLimit.maximum(signedBits: pathconf(path, _PC_FILESIZEBITS), fileSystem: name)
+            return OutputFileLimit.maximum(signedBits: fpathconf(descriptor, _PC_FILESIZEBITS), fileSystem: name)
         }
     }
 }
