@@ -4,6 +4,36 @@ import XCTest
 @testable import ARTOFFICE
 
 final class MediaExportTests: XCTestCase {
+    func testChunkReuseRejectsRedirectedAndInvalidCache() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let projectDirectory = root.appendingPathComponent("project"), outside = root.appendingPathComponent("outside")
+        let current = projectDirectory.appendingPathComponent(String(repeating: "a", count: 64))
+        let previous = projectDirectory.appendingPathComponent(String(repeating: "b", count: 64))
+        for directory in [current, previous, outside] { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true) }
+        let range = ExportChunk(index: 0, start: 0, end: Clock.ticks(1)), key = String(repeating: "c", count: 64)
+        let source = ExportEngine.chunkURL(range, job: previous), sentinel = outside.appendingPathComponent("sentinel.mp4")
+        try Data("unrelated".utf8).write(to: sentinel)
+        try FileManager.default.createSymbolicLink(at: source, withDestinationURL: sentinel)
+        var journal = ExportJournal()
+        journal.completed["0"] = ChunkReceipt(byteCount: 9, modifiedAt: nil, range: range, contentKey: key)
+        try JSONEncoder().encode(journal).write(to: previous.appendingPathComponent("journal.json"))
+        XCTAssertTrue(ChunkReuse.candidates(projectDirectory: projectDirectory, excluding: current).isEmpty)
+        try FileManager.default.removeItem(at: source)
+        try Data("not a movie".utf8).write(to: source)
+        let values = try source.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+        journal.completed["0"] = ChunkReceipt(byteCount: Int64(values.fileSize ?? 0), modifiedAt: values.contentModificationDate, range: range, contentKey: key)
+        try JSONEncoder().encode(journal).write(to: previous.appendingPathComponent("journal.json"))
+        let candidates = ChunkReuse.candidates(projectDirectory: projectDirectory, excluding: current)[key] ?? []
+        XCTAssertEqual(candidates.count, 1)
+        let output = ExportEngine.chunkURL(range, job: current)
+        let linked = try await ChunkReuse.link(candidates, to: output, chunk: range, project: Project(), control: ExportControl())
+        XCTAssertNil(linked); XCTAssertFalse(FileManager.default.fileExists(atPath: output.path))
+        XCTAssertEqual(try Data(contentsOf: sentinel), Data("unrelated".utf8))
+        journal.rendererVersion -= 1
+        try JSONEncoder().encode(journal).write(to: previous.appendingPathComponent("journal.json"))
+        XCTAssertTrue(ChunkReuse.candidates(projectDirectory: projectDirectory, excluding: current).isEmpty)
+    }
     func testCompletedCleanupPreservesSourcesChunksAndExternalFiles() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -190,6 +220,24 @@ final class MediaExportTests: XCTestCase {
         _ = try await ExportEngine.run(project: project, directory: directory, jobsRoot: jobs, destination: nil,
                                       control: ExportControl(), chunkSeconds: 2) { _, _ in }
         XCTAssertGreaterThan(try Data(contentsOf: chunk).count, 100)
+        // A title correction changes only the chunks that display that title.
+        // The unaffected final chunk is linked across job identities，not copied.
+        project.clips[0].bandName = "訂正した日本語バンド"
+        let editedFiles = try await ExportEngine.run(project: project, directory: directory, jobsRoot: jobs, destination: nil,
+            control: ExportControl(), chunkSeconds: 2) { _, _ in }
+        let editedJob = jobs.appendingPathComponent(project.id.uuidString).appendingPathComponent(try ExportEngine.key(project))
+        let report = try JSONDecoder().decode(ExportReport.self, from: Data(contentsOf: editedJob.appendingPathComponent("performance.json")))
+        XCTAssertEqual(report.reusedChunkIndices, [2])
+        XCTAssertEqual(report.chunks.map(\.index), [0, 1])
+        let originalTail = job.appendingPathComponent("chunk-2.mp4"), editedTail = editedJob.appendingPathComponent("chunk-2.mp4")
+        let originalInode = try FileManager.default.attributesOfItem(atPath: originalTail.path)[.systemFileNumber] as? NSNumber
+        let editedInode = try FileManager.default.attributesOfItem(atPath: editedTail.path)[.systemFileNumber] as? NSNumber
+        XCTAssertNotNil(originalInode); XCTAssertEqual(originalInode, editedInode)
+        let editedChapters = try String(contentsOf: XCTUnwrap(editedFiles.first { $0.pathExtension == "txt" }), encoding: .utf8)
+        XCTAssertTrue(editedChapters.contains("訂正した日本語バンド"))
+        // Removing an old job's link must not remove the new job's reusable media.
+        try FileManager.default.removeItem(at: originalTail)
+        try await ExportEngine.validateChunk(editedTail, chunk: ExportChunk(index: 2, start: Clock.ticks(4), end: Clock.ticks(5.5)), project: project)
     }
     func testCancellationBeforeStartRetainsEditing() async throws {
         let control = ExportControl(); control.cancel()

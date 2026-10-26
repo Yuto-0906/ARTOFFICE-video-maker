@@ -26,12 +26,14 @@ if [[ "${1:-check}" == check ]]; then
   case "${2:-all}" in
     all) ;;
     media) TEST_SELECTION=(-only-testing:ARTOFFICETests/MediaExportTests/testShortRelinkIsRejectedBeforeCopyingMedia
+                           -only-testing:ARTOFFICETests/MediaExportTests/testChunkReuseRejectsRedirectedAndInvalidCache
                            -only-testing:ARTOFFICETests/MediaExportTests/testCompletedCleanupPreservesSourcesChunksAndExternalFiles
                            -only-testing:ARTOFFICETests/MediaExportTests/testOutputFormatsPreserveFrameCountAndRate
                            -only-testing:ARTOFFICETests/MediaExportTests/testInterruptedAttemptDoesNotHideCommittedOutputs
                            -only-testing:ARTOFFICETests/MediaExportTests/testRotationMatchesAVFoundationReference
                            -only-testing:ARTOFFICETests/MediaExportTests/testChunkedExportMuxAndReuse) ;;
     storage) TEST_SELECTION=(-only-testing:ARTOFFICETests/MediaExportTests/testCompletedCleanupPreservesSourcesChunksAndExternalFiles
+                             -only-testing:ARTOFFICETests/MediaExportTests/testChunkReuseRejectsRedirectedAndInvalidCache
                              -only-testing:ARTOFFICETests/MediaExportTests/testInterruptedAttemptDoesNotHideCommittedOutputs) ;;
     *) echo 'Unknown test selection' >&2; exit 2 ;;
   esac

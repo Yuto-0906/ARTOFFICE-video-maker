@@ -40,9 +40,10 @@ struct ChunkReceipt: Codable {
     var byteCount: Int64
     var modifiedAt: Date?
     var range: ExportChunk
+    var contentKey: String? = nil
 }
 struct ExportJournal: Codable {
-    var rendererVersion = 4
+    var rendererVersion = ExportEngine.rendererVersion
     var completed: [String: ChunkReceipt] = [:]
 }
 struct ChunkMeasurement: Codable {
@@ -68,18 +69,20 @@ struct ExportReport: Codable {
     var memorySamplingIntervalSeconds = 1
     var performanceWindows: [PerformanceWindow] = []
     var chunks: [ChunkMeasurement] = []
+    var reusedChunkIndices: [Int] = []
     var elapsedSeconds: Double = 0
     var finalizationSeconds: Double = 0
 }
 
 enum ExportEngine {
+    static let rendererVersion = 5
     // All four output frame rates have integral frame durations at 60 kHz.
     // Five-hour movie durations also fit a 32-bit duration field at this scale.
     private static let outputVideoScale: CMTimeScale = 60_000
     static func key(_ project: Project) throws -> String {
         struct Identity: Encodable { let version: Int; let clips: [Clip]; let resolution: Resolution; let frameRate: FrameRate }
         let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
-        let data = try encoder.encode(Identity(version: 4, clips: project.clips, resolution: project.resolution, frameRate: project.frameRate))
+        let data = try encoder.encode(Identity(version: rendererVersion, clips: project.clips, resolution: project.resolution, frameRate: project.frameRate))
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
     static func run(project: Project, directory: URL, jobsRoot: URL, destination: URL?, control: ExportControl, chunkSeconds: Int = 300,
@@ -97,20 +100,7 @@ enum ExportEngine {
         let capacity = CapacityEstimate(duration: timeline.duration, resolution: project.resolution, separateDestination: destination != nil)
         let journalURL = job.appendingPathComponent("journal.json")
         var journal = (try? JSONDecoder().decode(ExportJournal.self, from: Data(contentsOf: journalURL))) ?? ExportJournal()
-        // A reusable chunk is checked against both the receipt and its actual media tracks below.
-        let used = try chunks.reduce(Int64(0)) { total, chunk in
-            let url = chunkURL(chunk, job: job)
-            guard journal.completed[String(chunk.index)] != nil, FileManager.default.fileExists(atPath: url.path) else { return total }
-            return total + Int64((try url.resourceValues(forKeys: [.fileSizeKey])).fileSize ?? 0)
-        }
-        let sameVolume = (try? job.resourceValues(forKeys: [.volumeIdentifierKey]).volumeIdentifier as? NSObject)
-            == (try? outputDirectory.resourceValues(forKeys: [.volumeIdentifierKey]).volumeIdentifier as? NSObject)
-        if destination != nil && sameVolume {
-            try MediaFiles.requireSpace(max(1_000_000_000, capacity.localWorking + capacity.destinationWorking - used - 1_000_000_000), at: job)
-        } else {
-            try MediaFiles.requireSpace(max(1_000_000_000, capacity.localWorking - used), at: job)
-            if destination != nil { try MediaFiles.requireSpace(capacity.destinationWorking, at: outputDirectory) }
-        }
+        if journal.rendererVersion != rendererVersion { journal = ExportJournal() }
         let clock = Date()
         var report = ExportReport(budget: DeviceBudget.current(), systemVersion: UIDevice.current.systemVersion,
             metalDevice: MTLCreateSystemDefaultDevice()?.name ?? "unavailable", resolution: project.resolution.rawValue, frameRate: project.frameRate.rawValue)
@@ -137,11 +127,40 @@ enum ExportEngine {
         let composition = try await CompositionBuilder.build(project: project, directory: directory)
         // Keep security scopes alive across asynchronous reads and finalization.
         defer { withExtendedLifetime(composition.leases) {} }
+        let candidates = ChunkReuse.candidates(projectDirectory: job.deletingLastPathComponent(), excluding: job)
+        var contentKeys: [Int: String] = [:], reused: Set<Int> = [], used: Int64 = 0
+        for chunk in chunks {
+            try control.check()
+            let identity = ChunkIdentity(project: project, timeline: timeline, chunk: chunk,
+                rendererVersion: rendererVersion, audioBitRate: audioEncoding.bitRate)
+            let contentKey = SHA256.hash(data: try identity.encoded()).map { String(format: "%02x", $0) }.joined()
+            contentKeys[chunk.index] = contentKey
+            let output = chunkURL(chunk, job: job)
+            if let receipt = journal.completed[String(chunk.index)], receipt.contentKey == contentKey,
+               try await reusable(output, receipt: receipt, chunk: chunk, project: project) {
+                reused.insert(chunk.index); used += receipt.byteCount
+            } else if let receipt = try await ChunkReuse.link(candidates[contentKey] ?? [], to: output, chunk: chunk, project: project, control: control) {
+                journal.completed[String(chunk.index)] = receipt
+                try JSONEncoder().encode(journal).write(to: journalURL, options: .atomic)
+                reused.insert(chunk.index); used += receipt.byteCount
+            }
+        }
+        report.reusedChunkIndices = reused.sorted()
+        // Validated hard links already occupy storage；budget only the missing chunks
+        // and the new final file，including when editing changes the job identity.
+        let sameVolume = (try? job.resourceValues(forKeys: [.volumeIdentifierKey]).volumeIdentifier as? NSObject)
+            == (try? outputDirectory.resourceValues(forKeys: [.volumeIdentifierKey]).volumeIdentifier as? NSObject)
+        if destination != nil && sameVolume {
+            try MediaFiles.requireSpace(max(1_000_000_000, capacity.localWorking + capacity.destinationWorking - used - 1_000_000_000), at: job)
+        } else {
+            try MediaFiles.requireSpace(max(1_000_000_000, capacity.localWorking - used), at: job)
+            if destination != nil { try MediaFiles.requireSpace(capacity.destinationWorking, at: outputDirectory) }
+        }
         for chunk in chunks {
             try control.check()
             trace("chunk \(chunk.index) range=\(Clock.seconds(chunk.start))...\(Clock.seconds(chunk.end))")
             let output = chunkURL(chunk, job: job)
-            if let receipt = journal.completed[String(chunk.index)], try await reusable(output, receipt: receipt, chunk: chunk, project: project) {
+            if reused.contains(chunk.index) {
                 progress(Double(chunk.end) / Double(timeline.duration) * 0.94, "処理済みの区間を再利用しています")
                 continue
             }
@@ -159,7 +178,8 @@ enum ExportEngine {
                 if FileManager.default.fileExists(atPath: output.path) { try FileManager.default.removeItem(at: output) }
                 try FileManager.default.moveItem(at: partial, to: output)
                 let values = try output.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-                journal.completed[String(chunk.index)] = ChunkReceipt(byteCount: Int64(values.fileSize ?? 0), modifiedAt: values.contentModificationDate, range: chunk)
+                journal.completed[String(chunk.index)] = ChunkReceipt(byteCount: Int64(values.fileSize ?? 0), modifiedAt: values.contentModificationDate,
+                    range: chunk, contentKey: contentKeys[chunk.index])
                 try JSONEncoder().encode(journal).write(to: journalURL, options: .atomic)
                 report.chunks.append(ChunkMeasurement(index: chunk.index, mediaSeconds: Clock.seconds(chunk.duration),
                     elapsedSeconds: Date().timeIntervalSince(start), residentBytes: residentMemory(), thermalState: ProcessInfo.processInfo.thermalState.rawValue))
