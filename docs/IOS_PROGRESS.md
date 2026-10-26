@@ -37,6 +37,8 @@ App ID `com.yuto0906.artoffice-video-maker.ios`と`ARTOFFICE iPhone iPad Develop
 
 Windowsで使うIPA構成検査を`scripts/ios/check-ipa.py`へ配置し，Pythonの構文検査が通った。IPAの実物を検査した結果ではない。導入・上書き再導入・読み戻しの手順は[IOS_INSTALL_WINDOWS.md](IOS_INSTALL_WINDOWS.md)へまとめた。
 
+2026年10月26日，ユーザーからiPadへの導入はいったん不要との指示を受けた。iPadのインストール・実機受入を後日に延期する。iPad向けの実装とビルド対象は維持し，実機の動作・性能は未検証として残す。
+
 ## ソースとビルド環境
 
 - リポジトリ：[Yuto-0906/ARTOFFICE-video-maker](https://github.com/Yuto-0906/ARTOFFICE-video-maker)。
