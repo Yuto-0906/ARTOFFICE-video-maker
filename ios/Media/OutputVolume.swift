@@ -5,7 +5,7 @@ enum OutputVolume {
     /// Returns nil when the provider/driver does not expose its limit. This is
     /// a filesystem query，not a probe that allocates or writes a large file.
     static func maximumFileSize(at directory: URL) -> Int64? {
-        directory.withUnsafeFileSystemRepresentation { path in
+        directory.withUnsafeFileSystemRepresentation { path -> Int64? in
             guard let path else { return nil }
             var volume = statfs()
             guard Darwin.statfs(path, &volume) == 0 else { return nil }
