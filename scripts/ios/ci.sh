@@ -25,6 +25,7 @@ if [[ "${1:-check}" == check ]]; then
   TEST_SELECTION=()
   case "${2:-all}" in
     all) ;;
+    ui) TEST_SELECTION=(-only-testing:ARTOFFICEUITests/EditorUITests/testEditorNavigationAndSavedProjectSurviveRelaunch) ;;
     media) TEST_SELECTION=(-only-testing:ARTOFFICETests/MediaExportTests/testShortRelinkIsRejectedBeforeCopyingMedia
                            -only-testing:ARTOFFICETests/MediaExportTests/testOutputVolumeReadsRealFilesystemLimitWithoutWritingMedia
                            -only-testing:ARTOFFICETests/MediaExportTests/testTimelinePreviewUsesTrimmedTimelineAndDeviceRenderSize
@@ -96,5 +97,5 @@ PY
 elif [[ "${1:-}" == device ]]; then
   python3 scripts/ios/sign.py
 else
-  echo 'Usage: ci.sh check [all|media|storage]|device' >&2; exit 2
+  echo 'Usage: ci.sh check [all|media|storage|ui]|device' >&2; exit 2
 fi

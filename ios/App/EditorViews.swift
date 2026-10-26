@@ -90,8 +90,17 @@ struct ImportView: View {
     var body: some View {
         List {
             Section("イベント") {
-                TextField("イベント名", text: $store.project.name).accessibilityIdentifier("eventName")
-                    .focused($eventNameFocused).submitLabel(.done).onSubmit { eventNameFocused = false }
+                HStack {
+                    TextField("イベント名", text: $store.project.name).accessibilityIdentifier("eventName")
+                        .autocorrectionDisabled()
+                        .focused($eventNameFocused).submitLabel(.done).onSubmit { eventNameFocused = false }
+                    if !store.project.name.isEmpty {
+                        Button("イベント名を消去", systemImage: "xmark.circle.fill") {
+                            store.project.name = ""; eventNameFocused = true
+                        }.labelStyle(.iconOnly).buttonStyle(.borderless).foregroundStyle(.secondary)
+                            .frame(width: 44, height: 44).accessibilityIdentifier("clearEventName")
+                    }
+                }
                 LabeledContent("アプリ内の素材", value: ByteCountFormatter.string(fromByteCount: store.storageBytes, countStyle: .file))
             }
             Section {

@@ -10,10 +10,16 @@ import XCTest
         XCTAssertTrue(create.waitForExistence(timeout: 15)); screenshot(app, name: "01-library")
         create.tap()
         let name = app.textFields["eventName"]
-        XCTAssertTrue(name.waitForExistence(timeout: 10)); name.tap()
-        let old = name.value as? String ?? ""
-        name.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: old.count) + "Live UI Test\n")
+        XCTAssertTrue(name.waitForExistence(timeout: 10))
+        let clearName = app.buttons["clearEventName"]
+        XCTAssertTrue(clearName.waitForExistence(timeout: 10)); clearName.tap()
+        let empty = expectation(for: NSPredicate(format: "value == %@ OR value == %@", "", "イベント名"), evaluatedWith: name)
+        wait(for: [empty], timeout: 5)
+        name.tap(); name.typeText("Live UI Test")
+        let entered = expectation(for: NSPredicate(format: "value == %@", "Live UI Test"), evaluatedWith: name)
+        wait(for: [entered], timeout: 5)
         XCTAssertEqual(name.value as? String, "Live UI Test")
+        name.typeText("\n")
         let save = app.buttons["saveProject"]
         XCTAssertTrue(save.waitForExistence(timeout: 10)); save.tap()
         let saved = expectation(for: NSPredicate(format: "label CONTAINS %@", "保存済み"), evaluatedWith: save)
