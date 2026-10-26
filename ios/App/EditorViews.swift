@@ -27,6 +27,7 @@ struct LibraryView: View {
                                 Spacer(); Image(systemName: "chevron.right").foregroundStyle(.secondary)
                             }.padding(.vertical, 10)
                         }
+                        .accessibilityIdentifier("project-" + project.id.uuidString)
                         .contextMenu {
                             Button("複製", systemImage: "doc.on.doc") { Task { await store.duplicate(project) } }
                             Button("削除", systemImage: "trash", role: .destructive) { deletion = project }

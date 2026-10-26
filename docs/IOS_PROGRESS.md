@@ -19,6 +19,10 @@
 
 このプレビュー追加分は`46a6782`の検証には含まれず，別のCodemagic検証が必要である。カット済みの1.5秒の共通時間軸，端末別の合成解像度，フェード前後・途中の画素，範囲外へのシーク，解放，素材のない状態のエラーを試験へ追加した。[AppleのAVVideoCompositingの説明](https://developer.apple.com/documentation/avfoundation/avvideocompositing)に示される，AVPlayerItemと画像生成・出力で共通のコンポジターを使う構成に基づく。実機の再生速度・音声・タッチ操作の確認は未実施である。
 
+保存先の1ファイル上限も照会する実装を追加した。`statfs`によるファイルシステムの識別と`pathconf(_PC_FILESIZEBITS)`を使い，FATは4,294,967,295バイトの上限を別に扱う。出力開始前は余裕を含む見積り，結合前は確定済み区間の実サイズで確認し，超過時には処理済み区間を保持して別の保存先を案内する。APIの定義は[Appleのunistd.h](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/unistd.h)，符号付きビット数の意味は[Open GroupのFILESIZEBITSの説明](https://posix.opengroup.org/docs/PX1.html)を参照した。ビット数は上限の範囲を示すもので，保存先プロバイダーの個別制限を保証しない。照会できない場合は診断を未取得として扱い，画面でも保存先仕様の確認を案内する。実際のFAT媒体やクラウドでの検証は未実施である。
+
+#9のiPhone側ではメディア9件が成功したが，UI試験は終了・再起動後の一覧検索で失敗した。テストの保存先が一時領域だったため，実際のアプリと同じApplication Support内の専用UUIDフォルダーへ揃える。行には固定形式のアクセシビリティ識別子を設け，入力値を保存前と再開後に確認する。再起動直後の画面も添付し，検索失敗時には画面の要素情報をログへ記録する。原因を確定したとは扱わず，次の全体検証で確認する。
+
 ## ソースとビルド環境
 
 - リポジトリ：[Yuto-0906/ARTOFFICE-video-maker](https://github.com/Yuto-0906/ARTOFFICE-video-maker)。

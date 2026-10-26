@@ -4,6 +4,16 @@ import XCTest
 @testable import ARTOFFICE
 
 final class MediaExportTests: XCTestCase {
+    func testOutputVolumeReadsRealFilesystemLimitWithoutWritingMedia() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let maximum = try XCTUnwrap(OutputVolume.maximumFileSize(at: root))
+        let estimate = CapacityEstimate(duration: Clock.ticks(18_000), resolution: .quadHD, separateDestination: false)
+        XCTAssertGreaterThan(maximum, estimate.output)
+        XCTAssertNoThrow(try OutputFileLimit.require(estimate.output, maximum: maximum))
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil).isEmpty)
+    }
     @MainActor func testTimelinePreviewUsesTrimmedTimelineAndDeviceRenderSize() async throws {
         executionTimeAllowance = 600
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

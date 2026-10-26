@@ -31,7 +31,7 @@ import SwiftUI
             .appendingPathComponent("ARTOFFICE", isDirectory: true)
         #if DEBUG
         if let seed = ProcessInfo.processInfo.environment["ARTOFFICE_UI_TEST_ROOT"], let id = UUID(uuidString: seed) {
-            support = FileManager.default.temporaryDirectory.appendingPathComponent("ARTOFFICE-UI-" + id.uuidString)
+            support = support.appendingPathComponent("UITests", isDirectory: true).appendingPathComponent(id.uuidString, isDirectory: true)
         }
         #endif
         root = support.appendingPathComponent("Projects", isDirectory: true)

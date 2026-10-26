@@ -26,6 +26,7 @@ if [[ "${1:-check}" == check ]]; then
   case "${2:-all}" in
     all) ;;
     media) TEST_SELECTION=(-only-testing:ARTOFFICETests/MediaExportTests/testShortRelinkIsRejectedBeforeCopyingMedia
+                           -only-testing:ARTOFFICETests/MediaExportTests/testOutputVolumeReadsRealFilesystemLimitWithoutWritingMedia
                            -only-testing:ARTOFFICETests/MediaExportTests/testTimelinePreviewUsesTrimmedTimelineAndDeviceRenderSize
                            -only-testing:ARTOFFICETests/MediaExportTests/testChunkReuseRejectsRedirectedAndInvalidCache
                            -only-testing:ARTOFFICETests/MediaExportTests/testCompletedCleanupPreservesSourcesChunksAndExternalFiles
@@ -34,6 +35,7 @@ if [[ "${1:-check}" == check ]]; then
                            -only-testing:ARTOFFICETests/MediaExportTests/testRotationMatchesAVFoundationReference
                            -only-testing:ARTOFFICETests/MediaExportTests/testChunkedExportMuxAndReuse) ;;
     storage) TEST_SELECTION=(-only-testing:ARTOFFICETests/MediaExportTests/testCompletedCleanupPreservesSourcesChunksAndExternalFiles
+                             -only-testing:ARTOFFICETests/MediaExportTests/testOutputVolumeReadsRealFilesystemLimitWithoutWritingMedia
                              -only-testing:ARTOFFICETests/MediaExportTests/testChunkReuseRejectsRedirectedAndInvalidCache
                              -only-testing:ARTOFFICETests/MediaExportTests/testInterruptedAttemptDoesNotHideCommittedOutputs) ;;
     *) echo 'Unknown test selection' >&2; exit 2 ;;
@@ -76,7 +78,7 @@ PY
       ${TEST_DIAGNOSTICS[@]+"${TEST_DIAGNOSTICS[@]}"} \
       ${TEST_SELECTION[@]+"${TEST_SELECTION[@]}"} \
       -resultBundlePath "ios/build/${FAMILY}.xcresult" CODE_SIGNING_ALLOWED=NO test-without-building \
-      2>&1 | tee "ios/build/${FAMILY}-tests.log" | awk '/Test Case|Test Suite|ARTOFFICE AAC|ARTOFFICE export|ARTOFFICE test|error:|failed|TEST FAILED|TEST SUCCEEDED|CoreSimulator|IDE.*(error|Error|timed out)|Testing started/ { print; fflush() }' \
+      2>&1 | tee "ios/build/${FAMILY}-tests.log" | awk '/Test Case|Test Suite|ARTOFFICE AAC|ARTOFFICE export|ARTOFFICE test|ARTOFFICE UI|error:|failed|TEST FAILED|TEST SUCCEEDED|CoreSimulator|IDE.*(error|Error|timed out)|Testing started/ { print; fflush() }' \
       || TEST_RESULT=$?
     if [[ "$TEST_RESULT" != 0 ]]; then
       OVERALL_RESULT=1

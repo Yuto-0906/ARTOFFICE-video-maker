@@ -13,6 +13,7 @@ import XCTest
         XCTAssertTrue(name.waitForExistence(timeout: 10)); name.tap()
         let old = name.value as? String ?? ""
         name.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: old.count) + "Live UI Test\n")
+        XCTAssertEqual(name.value as? String, "Live UI Test")
         let save = app.buttons["saveProject"]
         XCTAssertTrue(save.waitForExistence(timeout: 10)); save.tap()
         let saved = expectation(for: NSPredicate(format: "label CONTAINS %@", "保存済み"), evaluatedWith: save)
@@ -26,8 +27,14 @@ import XCTest
         selectTab("書き出し", app: app)
         XCTAssertTrue(app.buttons["startExport"].waitForExistence(timeout: 5)); screenshot(app, name: "05-export")
         app.terminate(); app.launch()
-        let project = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Live UI Test")).firstMatch
-        XCTAssertTrue(project.waitForExistence(timeout: 15)); project.tap()
+        screenshot(app, name: "06-relaunch-library")
+        let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "project-"))
+        let project = rows.firstMatch
+        let found = project.waitForExistence(timeout: 15)
+        if !found {
+            print(app.debugDescription.split(separator: "\n").map { "ARTOFFICE UI \($0)" }.joined(separator: "\n"))
+        }
+        XCTAssertTrue(found); XCTAssertEqual(rows.count, 1); project.tap()
         XCTAssertTrue(name.waitForExistence(timeout: 10))
         XCTAssertEqual(name.value as? String, "Live UI Test")
     }

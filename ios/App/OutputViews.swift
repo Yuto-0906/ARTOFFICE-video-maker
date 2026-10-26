@@ -113,6 +113,8 @@ struct ExportView: View {
                     if destination != nil { LabeledContent("保存先に必要な容量の目安", value: bytes(capacity.destinationWorking)) }
                     Text("作業容量には処理済み区間と完成動画の同時保存を含みます。保存先が端末内の同じディスクなら，両方の空き容量が必要です。")
                         .font(.caption).foregroundStyle(.secondary)
+                    Text("保存先には完成動画を1ファイルで保存できる上限も必要です。クラウドなどで上限を取得できない場合は，保存先の仕様を確認してください。")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("チャプター") {
                     Text(timeline.chapters.isEmpty ? "動画を追加してください。" : timeline.chapters).font(.system(.body, design: .monospaced)).textSelection(.enabled)

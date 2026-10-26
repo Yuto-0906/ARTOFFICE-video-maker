@@ -64,6 +64,7 @@ struct ExportReport: Codable {
     var hardwareVerification = "Requires device profiling; simulator is not evidence"
     var audioBitRate: Int = 0
     var supportedAudioBitRates: [Int] = []
+    var destinationMaximumFileBytes: Int64? = nil
     var status = "running"
     var peakSampledResidentBytes: UInt64 = 0
     var memorySamplingIntervalSeconds = 1
@@ -115,6 +116,8 @@ enum ExportEngine {
             try? JSONEncoder().encode(report).write(to: job.appendingPathComponent("performance.json"), options: .atomic)
         }
         try JSONEncoder().encode(report).write(to: job.appendingPathComponent("performance.json"), options: .atomic)
+        report.destinationMaximumFileBytes = OutputVolume.maximumFileSize(at: outputDirectory)
+        try OutputFileLimit.require(Int64(Double(capacity.output) * 1.2) + 4_000_000, maximum: report.destinationMaximumFileBytes)
         trace("renderer=\(report.metalDevice)")
         progress(0, "音声の出力設定を確認しています")
         let audioEncoding = try AudioEncoding.supported()
@@ -191,6 +194,11 @@ enum ExportEngine {
         }
         try control.check()
         progress(0.94, "処理した区間を1本にまとめています")
+        let chunkBytes = try chunks.reduce(Int64(0)) { sum, chunk in
+            sum + Int64((try chunkURL(chunk, job: job).resourceValues(forKeys: [.fileSizeKey])).fileSize ?? 0)
+        }
+        // Recheck actual encoded sizes before creating a multi-GB final file.
+        try OutputFileLimit.require(Int64(Double(chunkBytes) * 1.02) + 4_000_000, maximum: OutputVolume.maximumFileSize(at: outputDirectory))
         let finalizeStart = Date(), stem = Naming.safeStem(project.name)
         let suffix = "_" + String(UUID().uuidString.prefix(8))
         let final = outputDirectory.appendingPathComponent(stem + suffix + ".mp4")
