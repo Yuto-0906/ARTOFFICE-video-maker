@@ -19,7 +19,7 @@ import SwiftUI
         let operation = generation
         do {
             let timeline = try Timeline(project)
-            guard let end = timeline.chunks(rate: project.frameRate).last?.end else { throw AppError.message("動画を追加してください。") }
+            guard let end = timeline.chunks(rate: project.outputFrameRate).last?.end else { throw AppError.message("動画を追加してください。") }
             let budget = DeviceBudget.current()
             let prepared = try await Task.detached { try await CompositionBuilder.build(project: project, directory: directory, previewHeight: Int(budget.previewHeight)) }.value
             try Task.checkCancellation()
@@ -108,8 +108,6 @@ struct TimelinePreview: View {
                             Spacer()
                             Button("10秒進む", systemImage: "goforward.10") { playback.seek(playback.current + 10) }.labelStyle(.iconOnly)
                         }.buttonStyle(.bordered).controlSize(.large)
-                        Text("タイトル・映像・音声のつながりを確認できます。表示は軽い解像度に調整しています。完成動画は選択した画質で書き出します。")
-                            .font(.caption).foregroundStyle(.secondary)
                         if let timeline = try? Timeline(project) {
                             GroupBox("バンドへ移動") {
                                 VStack(spacing: 0) {

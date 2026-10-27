@@ -12,7 +12,7 @@ struct LibraryView: View {
                 if store.projects.isEmpty {
                     ContentUnavailableView {
                         Label("ライブを動画にまとめよう", systemImage: "play.rectangle.on.rectangle")
-                    } description: { Text("プロジェクトを作って，動画を読み込んでください。編集内容はこの端末に自動保存されます。") }
+                    } description: { Text("編集内容は自動保存されます。") }
                     actions: { Button("新しいプロジェクト") { Task { await store.create() } }.buttonStyle(.borderedProminent).accessibilityIdentifier("newProject") }
                 } else {
                     List(store.projects) { project in
@@ -71,19 +71,19 @@ struct EditorView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     HStack(spacing: 14) {
                         Button("容量", systemImage: "internaldrive") { storage = true }.labelStyle(.titleAndIcon).disabled(store.busy || store.exporting)
-                        VStack(spacing: 1) {
-                            Button("保存", systemImage: "square.and.arrow.down") { Task { await store.saveNow() } }
-                                .labelStyle(.titleAndIcon).disabled(store.busy).accessibilityIdentifier("saveProject")
-                            Text(store.saveStatus == "保存済み" ? (store.saveFeedback ?? "自動保存済み") : store.saveStatus).font(.caption2)
-                                .foregroundStyle(.secondary).accessibilityIdentifier("saveStatus")
-                        }
+                        Button("保存", systemImage: "square.and.arrow.down") { Task { await store.saveNow() } }
+                            .labelStyle(.titleAndIcon).disabled(store.busy).accessibilityIdentifier("saveProject")
                     }
                 }
             }
-            .overlay { if store.busy { ProgressView(store.importStatus.isEmpty ? "処理しています" : store.importStatus).padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16)) } }
-            .overlay(alignment: .top) {
-                if store.showingSaveToast, let feedback = store.saveFeedback { Label(feedback, systemImage: "checkmark.circle.fill").font(.subheadline).padding(10).background(.regularMaterial, in: Capsule()).padding(.top, 8).allowsHitTesting(false).accessibilityHidden(true) }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                HStack {
+                    Spacer()
+                    Text(store.saveStatus == "保存済み" ? (store.saveFeedback ?? "自動保存済み") : store.saveStatus)
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1).accessibilityIdentifier("saveStatus")
+                }.padding(.horizontal, 20).padding(.vertical, 4)
             }
+            .overlay { if store.busy { ProgressView(store.importStatus.isEmpty ? "処理しています" : store.importStatus).padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16)) } }
             .sheet(isPresented: $storage) { StorageOverview() }
         }
     }
@@ -149,18 +149,18 @@ struct ClipEditor: View {
                     }.buttonStyle(.bordered).controlSize(.large)
                     DisclosureGroup("名前と並び順", isExpanded: $namingExpanded) {
                         VStack(alignment: .leading, spacing: 12) {
-                            Text("一覧で使う動画名").font(.caption).foregroundStyle(.secondary)
+                            Text("動画名").font(.caption).foregroundStyle(.secondary)
                             TextField("動画の表示名", text: Binding(get: { store.project.clips[i].displayName ?? (clip.source.fileName as NSString).deletingPathExtension }, set: { store.project.clips[i].displayName = $0 }))
                                 .textFieldStyle(.roundedBorder).accessibilityIdentifier("clipDisplayName")
                             Text("元のファイル：\(clip.source.fileName)").font(.caption).foregroundStyle(.secondary)
                             if !clip.joinPrevious {
-                                Text("映像に表示するバンド名").font(.caption).foregroundStyle(.secondary)
+                                Text("バンド名").font(.caption).foregroundStyle(.secondary)
                                 TextField("動画に表示するバンド名", text: $store.project.clips[i].bandName).textFieldStyle(.roundedBorder)
                                     .accessibilityIdentifier("clipBandName")
                                 Button("表示名をバンド名にも使う") {
                                     store.project.clips[i].bandName = Naming.parse(clip.displayTitle + ".mp4")?.band ?? clip.displayTitle
                                 }.buttonStyle(.bordered)
-                            } else { Text("バンド名は連結した動画の先頭で変更できます。").font(.caption).foregroundStyle(.secondary) }
+                            } else { Text("バンド名は先頭の動画で変更").font(.caption).foregroundStyle(.secondary) }
                             if let group = store.project.groups.firstIndex(where: { $0.contains(where: { $0.id == id }) }) {
                                 HStack {
                                     Text("出演順 \(group + 1) / \(store.project.groups.count)")
@@ -169,7 +169,6 @@ struct ClipEditor: View {
                                     Button("後へ", systemImage: "arrow.down") { store.project.moveGroup(group, by: 1) }.disabled(group + 1 == store.project.groups.count)
                                 }.buttonStyle(.bordered).frame(minHeight: 44)
                             }
-                            Text("表示名とバンド名はこのプロジェクト内の名前です。元の動画やクラウド上のファイル名は変更しません。").font(.caption).foregroundStyle(.secondary)
                         }.frame(maxWidth: .infinity, alignment: .leading)
                     }.frame(minHeight: 44).onAppear { namingExpanded = organizing }
                     GroupBox("開始位置") {

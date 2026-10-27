@@ -59,11 +59,10 @@ struct StorageOverview: View {
                     Button("処理用キャッシュを削除", role: .destructive) { action = 1 }
                     Button("アプリ内の完成ファイルを削除", role: .destructive) { action = 2 }
                 } header: { Text("容量を整理") } footer: {
-                    Text("現在の編集で使う動画・写真や，Box・Google Driveなどの元ファイルは削除しません。完成品を削除する前に，必要なものを「ファイル」などへ保存してください。")
+                    Text("使用中の素材と元ファイルは残ります。")
                 }
                 Section("キャッシュの自動整理") {
-                    Text("書き出し完了時に，処理済み区間のキャッシュを直近2回分へ整理します。完成動画と入力素材は，自分で削除するまで保持します。")
-                    Text("未使用素材を削除すると，復旧用の保存世代も現在の編集内容へそろえます。外した動画が必要になった場合は再度取り込んでください。")
+                    Text("処理用キャッシュは直近2回分を保持します。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }.disabled(store.busy || store.exporting)

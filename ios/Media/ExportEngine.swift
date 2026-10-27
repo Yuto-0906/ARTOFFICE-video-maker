@@ -84,14 +84,14 @@ enum ExportEngine {
     static func key(_ project: Project) throws -> String {
         struct Identity: Encodable { let version: Int; let clips: [Clip]; let resolution: Resolution; let frameRate: FrameRate }
         let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
-        let data = try encoder.encode(Identity(version: rendererVersion, clips: project.clips, resolution: project.resolution, frameRate: project.frameRate))
+        let data = try encoder.encode(Identity(version: rendererVersion, clips: project.clips, resolution: project.resolution, frameRate: project.outputFrameRate))
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
     static func run(project: Project, directory: URL, jobsRoot: URL, destination: URL?, control: ExportControl, chunkSeconds: Int = 300,
                     progress: @escaping @Sendable (Double, String) -> Void) async throws -> [URL] {
         let timeline = try Timeline(project)
         guard !project.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AppError.message("イベント名を入力してください。") }
-        let chunks = timeline.chunks(rate: project.frameRate, seconds: chunkSeconds)
+        let chunks = timeline.chunks(rate: project.outputFrameRate, seconds: chunkSeconds)
         guard !chunks.isEmpty else { throw AppError.message("動画を追加してください。") }
         let job = jobsRoot.appendingPathComponent(project.id.uuidString).appendingPathComponent(try key(project))
         try FileManager.default.createDirectory(at: job, withIntermediateDirectories: true)
@@ -105,7 +105,7 @@ enum ExportEngine {
         if journal.rendererVersion != rendererVersion { journal = ExportJournal() }
         let clock = Date()
         var report = ExportReport(budget: DeviceBudget.current(), systemVersion: UIDevice.current.systemVersion,
-            metalDevice: MTLCreateSystemDefaultDevice()?.name ?? "unavailable", resolution: project.resolution.rawValue, frameRate: project.frameRate.rawValue)
+            metalDevice: MTLCreateSystemDefaultDevice()?.name ?? "unavailable", resolution: project.resolution.rawValue, frameRate: project.outputFrameRate.rawValue)
         let sampler = PerformanceSampler(budget: report.budget)
         defer {
             let sampled = sampler.snapshot()
@@ -247,7 +247,7 @@ enum ExportEngine {
               !(try await asset.loadTracks(withMediaType: .audio)).isEmpty else { throw AppError.message("出力区間の映像・音声が不足しています。") }
         let size = try await video.load(.naturalSize), fps = try await video.load(.nominalFrameRate)
         guard Int(size.width) == project.resolution.width, Int(size.height) == project.resolution.height,
-              abs(Double(fps) - project.frameRate.value) < 0.05,
+              abs(Double(fps) - project.outputFrameRate.value) < 0.05,
               abs(duration.seconds - Clock.seconds(chunk.duration)) < 0.1 else { throw AppError.message("出力区間の形式または長さが一致しません。") }
     }
     static func writeChunk(composition: RenderComposition, chunk: ExportChunk, project: Project, audioEncoding: AudioEncoding, url: URL,
@@ -278,7 +278,7 @@ enum ExportEngine {
             AVVideoColorPropertiesKey: [AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
                 AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2, AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2],
             AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: project.resolution.bitrate,
-                AVVideoExpectedSourceFrameRateKey: project.frameRate.value, AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
+                AVVideoExpectedSourceFrameRateKey: project.outputFrameRate.value, AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
                 AVVideoMaxKeyFrameIntervalDurationKey: 2, AVVideoAllowFrameReorderingKey: false]
         ]
         guard writer.canApply(outputSettings: videoSettings, forMediaType: .video) else { throw AppError.message("この端末では選択した画質で出力できません。") }

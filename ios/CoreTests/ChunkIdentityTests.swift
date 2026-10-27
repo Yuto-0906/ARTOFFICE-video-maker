@@ -9,14 +9,14 @@ final class ChunkIdentityTests: XCTestCase {
         return project
     }
     private func identity(_ project: Project, index: Int = 0, audio: Int = 320_000, version: Int = 5) throws -> Data {
-        let timeline = try Timeline(project), chunk = timeline.chunks(rate: project.frameRate)[index]
+        let timeline = try Timeline(project), chunk = timeline.chunks(rate: project.outputFrameRate)[index]
         return try ChunkIdentity(project: project, timeline: timeline, chunk: chunk, rendererVersion: version, audioBitRate: audio).encoded()
     }
     func testFiveHourTitleEditKeepsUnchangedLaterChunks() throws {
         let original = project()
         var edited = original; edited.clips[0].bandName = "訂正した名前"
         XCTAssertNotEqual(try identity(original), try identity(edited))
-        let count = try Timeline(original).chunks(rate: original.frameRate).count
+        let count = try Timeline(original).chunks(rate: original.outputFrameRate).count
         XCTAssertEqual(count, 60)
         for index in 1..<count { XCTAssertEqual(try identity(original, index: index), try identity(edited, index: index)) }
         edited.name = "イベント名の変更"; edited.clips[0].id = UUID()
@@ -44,7 +44,7 @@ final class ChunkIdentityTests: XCTestCase {
         XCTAssertNotEqual(baseline, try identity(edited, index: 1))
         edited = original; edited.resolution = .quadHD
         XCTAssertNotEqual(baseline, try identity(edited, index: 1))
-        edited = original; edited.frameRate = .ntsc30
+        edited = original; edited.matchesSourceFrameRate = false; edited.frameRate = .ntsc30
         XCTAssertNotEqual(baseline, try identity(edited, index: 1))
         XCTAssertNotEqual(baseline, try identity(original, index: 1, audio: 384_000))
         XCTAssertNotEqual(baseline, try identity(original, index: 1, version: 6))

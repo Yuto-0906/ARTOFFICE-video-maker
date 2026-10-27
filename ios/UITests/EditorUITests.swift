@@ -29,6 +29,9 @@ import XCTest
         stage("save project"); save.tap()
         let saved = expectation(for: NSPredicate(format: "label == %@", "保存しました"), evaluatedWith: app.staticTexts["saveStatus"])
         wait(for: [saved], timeout: 10)
+        let saveStatus = app.staticTexts["saveStatus"]
+        XCTAssertFalse(save.frame.intersects(saveStatus.frame), "保存ボタンと保存状態を重ねない")
+        XCTAssertTrue(app.windows.firstMatch.frame.contains(saveStatus.frame), "保存状態を画面内に収める")
         XCTAssertTrue(app.buttons["importVideoFolder"].exists)
         XCTAssertTrue(app.buttons["importVideoFiles"].exists)
         screenshot(app, name: "02-import")
@@ -38,6 +41,7 @@ import XCTest
         selectTab("サムネイル", app: app)
         XCTAssertTrue(app.staticTexts["集合写真を16:9に切り抜く"].waitForExistence(timeout: 5)); screenshot(app, name: "04-thumbnail")
         selectTab("書き出し", app: app)
+        XCTAssertTrue(app.otherElements["outputFrameRate"].exists || app.buttons["outputFrameRate"].exists)
         XCTAssertTrue(app.buttons["startExport"].waitForExistence(timeout: 5)); screenshot(app, name: "05-export")
         stage("terminate"); app.terminate()
         stage("relaunch"); app.launch()

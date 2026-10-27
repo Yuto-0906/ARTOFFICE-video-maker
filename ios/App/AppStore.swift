@@ -20,8 +20,6 @@ import SwiftUI
     @Published var storageBytes: Int64 = 0
     @Published var storageUsage = ProjectStorageUsage()
     @Published var saveFeedback: String?
-    @Published var showingSaveToast = false
-    private var feedbackTask: Task<Void, Never>?
     let root: URL
     let jobs: URL
     let repository: ProjectRepository
@@ -51,7 +49,7 @@ import SwiftUI
     func create() async {
         do {
             let fresh = Project(); try await repository.save(fresh); project = fresh; active = true
-            feedbackTask?.cancel(); saveFeedback = nil; showingSaveToast = false
+            saveFeedback = nil
             exportedFiles = []; outputLease = nil; diagnosticFile = nil; exportStatus = ""
         }
         catch { message = error.localizedDescription }
@@ -60,7 +58,7 @@ import SwiftUI
         do {
             let loaded = try await repository.load(project.id)
             self.project = loaded.project; active = true; exportedFiles = []; saveStatus = "保存済み"
-            feedbackTask?.cancel(); saveFeedback = nil; showingSaveToast = false
+            saveFeedback = nil
             let cacheDirectory = jobs.appendingPathComponent(project.id.uuidString)
             _ = try? await Task.detached { try ExportCacheStorage.remove(projectDirectory: cacheDirectory, partialOnly: true) }.value
             outputLease = nil; diagnosticFile = nil; exportStatus = ""
@@ -86,7 +84,7 @@ import SwiftUI
     }
     func changed() {
         guard active else { return }
-        feedbackTask?.cancel(); saveFeedback = nil; showingSaveToast = false
+        saveFeedback = nil
         saveStatus = "保存待ち"; saveTask?.cancel(); revision += 1
         let token = revision
         var snapshot = project; snapshot.modifiedAt = Date()
@@ -110,8 +108,7 @@ import SwiftUI
     }
     func saveNow() async {
         do {
-            try await flush(); feedbackTask?.cancel(); saveFeedback = "保存しました"; showingSaveToast = true
-            feedbackTask = Task { try? await Task.sleep(nanoseconds: 2_000_000_000); if !Task.isCancelled { showingSaveToast = false } }
+            try await flush(); saveFeedback = "保存しました"
         } catch { message = error.localizedDescription }
     }
     func refreshStorage() async {
@@ -190,7 +187,7 @@ import SwiftUI
                     guard clip.source.duration >= project.clips[i].end else { throw AppError.message("元のカット範囲より短い動画です。対応する素材を選んでください。") }
                     project.clips[i].source = clip.source
                 } else {
-                    if project.clips.isEmpty { project.frameRate = .suggested(clip.source.nominalFPS); project.selectedClip = clip.id }
+                    if project.clips.isEmpty { project.selectedClip = clip.id }
                     project.clips.append(clip)
                 }
                 // Commit after each file，so a later multi-gigabyte copy cannot erase the

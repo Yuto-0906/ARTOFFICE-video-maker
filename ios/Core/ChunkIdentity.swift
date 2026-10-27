@@ -22,7 +22,7 @@ struct ChunkIdentity: Encodable {
 
     init(project: Project, timeline: Timeline, chunk: ExportChunk, rendererVersion: Int, audioBitRate: Int) {
         self.rendererVersion = rendererVersion; range = chunk
-        resolution = project.resolution; frameRate = project.frameRate; self.audioBitRate = audioBitRate
+        resolution = project.resolution; frameRate = project.outputFrameRate; self.audioBitRate = audioBitRate
         var bandName = "", bandStart: Int64 = 0
         var result: [Layer] = []
         for segment in timeline.segments {

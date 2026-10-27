@@ -54,24 +54,21 @@ struct ImportView: View {
             }
             Section {
                 Button { relink = nil; request = MediaPickerRequest(folder: true, multiple: false) } label: {
-                    Label("フォルダー内の動画をまとめて追加", systemImage: "folder.badge.plus").frame(minHeight: 44)
+                    Label("フォルダーから追加", systemImage: "folder.badge.plus").frame(minHeight: 44)
                 }.accessibilityIdentifier("importVideoFolder")
                 Button { relink = nil; request = MediaPickerRequest() } label: {
-                    Label("動画をまとめて選択", systemImage: "doc.on.doc").frame(minHeight: 44)
+                    Label("動画を選択", systemImage: "doc.on.doc").frame(minHeight: 44)
                 }.accessibilityIdentifier("importVideoFiles")
                 PhotosPicker(selection: $photos, maxSelectionCount: 100, matching: .videos, preferredItemEncoding: .current) {
                     Label("写真ライブラリから追加", systemImage: "photo.on.rectangle.angled").frame(minHeight: 44)
                 }
-                Toggle("素材を端末内にコピーして保持", isOn: $copy)
+                Toggle("端末にコピー", isOn: $copy)
             } header: { Text("動画を追加") } footer: {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Box・Google Driveも「ファイル」の場所から選べます。各アプリをインストールして「ファイル」で有効にしてください。フォルダー選択に対応しない提供元では，動画の複数選択を使えます。")
-                    Text(copy ? "クラウドの動画は取得後に端末へコピーします。使い終わったコピーは右上の「容量」から削除できます。" : "ファイルを参照し，重複保存を減らします。クラウドや外部ドライブに再アクセスできる必要があります。写真ライブラリの動画はコピーします。")
-                }
+                if !copy { Text("参照元への接続が必要です。写真ライブラリの動画はコピーします。") }
             }
             Section {
                 if store.project.clips.isEmpty {
-                    Text("まず動画を追加してください。内容を再生してから，表示名・バンド名・出演順を整えられます。元のファイル名はそのままで使えます。")
+                    Text("動画はまだありません")
                         .foregroundStyle(.secondary)
                 }
                 ForEach(store.project.arrangedGroups) { group in
@@ -137,7 +134,7 @@ private struct ImportedBandRow: View {
             ForEach(group.clips) { clip in
                 VStack(alignment: .leading, spacing: 8) {
                     Text(clip.displayTitle).font(.subheadline.weight(.semibold)).lineLimit(2)
-                    Text("\(Clock.text(clip.duration))・\(clip.source.width)×\(clip.source.height)\(clip.source.hasAudio ? "" : "・音声なし")\(clip.source.isHDR ? "・HDR" : "")")
+                    Text("\(Clock.text(clip.duration))・\(clip.source.width)×\(clip.source.height)・\(clip.source.frameRateLabel)\(clip.source.hasAudio ? "" : "・音声なし")\(clip.source.isHDR ? "・HDR" : "")")
                         .font(.caption).foregroundStyle(.secondary)
                     Button("内容を確認・名前を変更", systemImage: "play.rectangle") { inspect(clip) }
                         .frame(minHeight: 44).accessibilityIdentifier("inspect-" + clip.id.uuidString)

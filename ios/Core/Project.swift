@@ -22,16 +22,18 @@ enum Resolution: String, Codable, CaseIterable, Identifiable {
 }
 
 enum FrameRate: String, Codable, CaseIterable, Identifiable {
-    case ntsc30 = "29.97", fps30 = "30", ntsc60 = "59.94", fps60 = "60"
+    case ntsc24 = "23.976", fps24 = "24", fps25 = "25"
+    case ntsc30 = "29.97", fps30 = "30", fps50 = "50", ntsc60 = "59.94", fps60 = "60"
     var id: String { rawValue }
     var frameTicks: Int64 {
-        switch self { case .ntsc30: return 20_020; case .fps30: return 20_000
+        switch self { case .ntsc24: return 25_025; case .fps24: return 25_000; case .fps25: return 24_000
+        case .ntsc30: return 20_020; case .fps30: return 20_000; case .fps50: return 12_000
         case .ntsc60: return 10_010; case .fps60: return 10_000 }
     }
     var value: Double { Double(Clock.scale) / Double(frameTicks) }
     static func suggested(_ fps: Double) -> Self {
-        if fps > 45 { return abs(fps - 59.94) < 0.02 ? .ntsc60 : .fps60 }
-        return abs(fps - 29.97) < 0.02 ? .ntsc30 : .fps30
+        guard fps.isFinite, fps > 0 else { return .fps30 }
+        return allCases.min { abs($0.value - fps) < abs($1.value - fps) } ?? .fps30
     }
 }
 
@@ -49,6 +51,12 @@ struct MediaSource: Codable, Hashable {
     var isHDR: Bool
     var importIdentity: String? = nil
     var folderBookmark: Data? = nil
+    var frameRateLabel: String {
+        var value = String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), nominalFPS)
+        while value.hasSuffix("0") { value.removeLast() }
+        if value.hasSuffix(".") { value.removeLast() }
+        return value + " fps"
+    }
 }
 
 struct Clip: Codable, Identifiable, Equatable {
@@ -91,6 +99,11 @@ struct Project: Codable, Identifiable, Equatable {
     var clips: [Clip] = []
     var resolution: Resolution = .fullHD
     var frameRate: FrameRate = .fps30
+    // Missing in older projects: preserve their saved manual output setting.
+    var matchesSourceFrameRate: Bool? = true
+    var outputFrameRate: FrameRate {
+        matchesSourceFrameRate == true ? clips.first.map { .suggested($0.source.nominalFPS) } ?? .fps30 : frameRate
+    }
     var thumbnail: PhotoCrop?
     var selectedClip: UUID?
     var destinationBookmark: Data?

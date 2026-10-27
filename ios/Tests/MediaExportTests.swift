@@ -188,12 +188,15 @@ final class MediaExportTests: XCTestCase {
         let media = root.appendingPathComponent("Media")
         try FileManager.default.createDirectory(at: media, withIntermediateDirectories: true)
         let source = media.appendingPathComponent("formats.mp4")
-        try await fixture(url: source, frames: 36, red: true)
+        try await fixture(url: source, frames: 36, red: true, fps: 60)
         let metadata = try await MediaFiles.probe(source, relativePath: "Media/formats.mp4", bookmark: nil)
+        XCTAssertEqual(metadata.nominalFPS, 60, accuracy: 0.02)
         for resolution in Resolution.allCases { for rate in FrameRate.allCases {
             var project = Project(); project.name = "Format \(resolution.rawValue) \(rate.rawValue)"
-            project.resolution = resolution; project.frameRate = rate
+            project.resolution = resolution; project.matchesSourceFrameRate = false; project.frameRate = rate
             project.clips = [Clip(source: metadata, bandName: "形式の試験")]
+            if rate == .fps60 { project.matchesSourceFrameRate = true }
+            XCTAssertEqual(project.outputFrameRate, rate)
             log("format test \(resolution.rawValue) \(rate.rawValue)")
             let files = try await ExportEngine.run(project: project, directory: root, jobsRoot: root.appendingPathComponent("jobs"),
                 destination: nil, control: ExportControl()) { _, _ in }
@@ -411,7 +414,7 @@ final class MediaExportTests: XCTestCase {
         log("cancellation composition completed")
         let audioEncoding = try AudioEncoding.supported()
         log("cancellation audio settings selected")
-        let control = ExportControl(), chunk = try XCTUnwrap(Timeline(project).chunks(rate: project.frameRate).first)
+        let control = ExportControl(), chunk = try XCTUnwrap(Timeline(project).chunks(rate: project.outputFrameRate).first)
         do {
             try await ExportEngine.writeChunk(composition: composition, chunk: chunk, project: project,
                 audioEncoding: audioEncoding, url: directory.appendingPathComponent("cancel.partial.mp4"), control: control) { _ in
@@ -423,7 +426,7 @@ final class MediaExportTests: XCTestCase {
         XCTAssertEqual(saved.project, project)
         XCTAssertTrue(FileManager.default.isReadableFile(atPath: url.path))
     }
-    func fixture(url: URL, frames: Int, red: Bool, transform: CGAffineTransform = .identity, quadrants: Bool = false) async throws {
+    func fixture(url: URL, frames: Int, red: Bool, transform: CGAffineTransform = .identity, quadrants: Bool = false, fps: Int32 = 30) async throws {
         log("video fixture beginning")
         let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
         defer { if writer.status == .writing { writer.cancelWriting() } }
@@ -462,9 +465,9 @@ final class MediaExportTests: XCTestCase {
                 // rather than allocating and painting it again for every timestamp.
                 still = buffer; log("video fixture pixels prepared")
             }
-            XCTAssertTrue(adaptor.append(try XCTUnwrap(still), withPresentationTime: CMTime(value: Int64(frame), timescale: 30)))
+            XCTAssertTrue(adaptor.append(try XCTUnwrap(still), withPresentationTime: CMTime(value: Int64(frame), timescale: fps)))
         }
-        input.markAsFinished(); writer.endSession(atSourceTime: CMTime(value: Int64(frames), timescale: 30))
+        input.markAsFinished(); writer.endSession(atSourceTime: CMTime(value: Int64(frames), timescale: fps))
         log("video fixture waiting for writer finish")
         await withCheckedContinuation { continuation in writer.finishWriting { continuation.resume() } }
         log("video fixture finished status=\(writer.status.rawValue)")

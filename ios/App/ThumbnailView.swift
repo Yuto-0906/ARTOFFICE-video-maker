@@ -54,7 +54,7 @@ struct ThumbnailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 Text("集合写真を16:9に切り抜く").font(.title2.bold())
-                Text("枠の中の写真を直接ドラッグしてください。指を広げると，その位置を中心に拡大できます。").foregroundStyle(.secondary)
+                Text("ドラッグで移動，ピンチで拡大").font(.caption).foregroundStyle(.secondary)
                 HStack {
                     PhotosPicker(selection: $photos, matching: .images, preferredItemEncoding: .current) { Label("写真から選ぶ", systemImage: "photo") }
                     Button("ファイルから選ぶ", systemImage: "folder") { picker = true }
@@ -73,14 +73,10 @@ struct ThumbnailView: View {
                     Slider(value: Binding(get: { store.project.thumbnail?.zoom ?? 1 }, set: { value in
                         if let current = store.project.thumbnail { store.project.thumbnail = current.zoomed(to: value, width: image.size.width, height: image.size.height) }
                     }), in: 1...5).accessibilityLabel("写真の拡大率")
-                    Text("100%は写真が枠を満たす最小サイズです。余白のない方向には動きません。表示している範囲がそのままJPEGになります。")
-                        .font(.caption).foregroundStyle(.secondary)
                     Button { Task { await shareThumbnail() } } label: {
                         Label(preparingShare ? "JPEGを準備しています" : "サムネイルを保存・共有", systemImage: "square.and.arrow.up")
                             .frame(maxWidth: .infinity, minHeight: 44)
                     }.buttonStyle(.borderedProminent).disabled(preparingShare)
-                    Text("切抜き位置は自動保存され，動画の書き出しにも使われます。サムネイルだけを保存することもできます。")
-                        .font(.caption).foregroundStyle(.secondary)
                     Button("この写真を使わない", role: .destructive) { store.project.thumbnail = nil; self.image = nil }.frame(minHeight: 44)
                 } else if loading { ProgressView("写真を読み込んでいます").frame(maxWidth: .infinity, minHeight: 180) }
                 else { ContentUnavailableView("写真を選択してください", systemImage: "photo") }

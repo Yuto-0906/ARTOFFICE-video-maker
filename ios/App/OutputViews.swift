@@ -22,16 +22,23 @@ struct ExportView: View {
         Form {
             Section("画質") {
                 Picker("解像度", selection: $store.project.resolution) { ForEach(Resolution.allCases) { Text($0.rawValue).tag($0) } }
-                Picker("フレームレート", selection: $store.project.frameRate) { ForEach(FrameRate.allCases) { Text($0.rawValue + " fps").tag($0) } }
-                Text("素材に合うフレームレートを選ぶと，不要なフレームの生成を避けられます。完成動画は選択した設定で出力します。")
-                    .font(.caption).foregroundStyle(.secondary)
+                Picker("フレームレート", selection: Binding(get: {
+                    store.project.matchesSourceFrameRate == true ? "auto" : store.project.frameRate.rawValue
+                }, set: { value in
+                    store.project.matchesSourceFrameRate = value == "auto"
+                    if let rate = FrameRate(rawValue: value) { store.project.frameRate = rate }
+                })) {
+                    Text(store.project.clips.isEmpty ? "自動" : "自動（\(store.project.outputFrameRate.rawValue) fps）").tag("auto")
+                    ForEach(FrameRate.allCases) { Text($0.rawValue + " fps").tag($0.rawValue) }
+                }.accessibilityIdentifier("outputFrameRate")
+                if store.project.matchesSourceFrameRate == true, !store.project.clips.isEmpty {
+                    Text("先頭の動画に合わせます。").font(.caption).foregroundStyle(.secondary)
+                }
             }.disabled(store.exporting || store.busy)
             Section("保存先") {
                 LabeledContent("出力先", value: destination?.lastPathComponent ?? "アプリ内")
                 Button("ファイルのフォルダーを選択", systemImage: "folder") { folderPicker = true }
                 if destination != nil { Button("アプリ内に戻す") { destination = nil; destinationBookmark = nil; store.project.destinationBookmark = nil } }
-                Text("外部の保存先を選ぶと，アプリ内に完成動画を重複して作りません。処理済み区間は復旧のため端末内に保持します。")
-                    .font(.caption).foregroundStyle(.secondary)
             }.disabled(store.exporting || store.busy)
             if let timeline = store.timeline {
                 let capacity = CapacityEstimate(duration: timeline.duration, resolution: store.project.resolution, separateDestination: destination != nil)
@@ -43,10 +50,6 @@ struct ExportView: View {
                     LabeledContent("完成動画の目安", value: bytes(capacity.output))
                     LabeledContent("端末内の作業容量の目安", value: bytes(capacity.localWorking))
                     if destination != nil { LabeledContent("保存先に必要な容量の目安", value: bytes(capacity.destinationWorking)) }
-                    Text("作業容量には処理済み区間と完成動画の同時保存を含みます。保存先が端末内の同じディスクなら，両方の空き容量が必要です。")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Text("保存先には完成動画を1ファイルで保存できる上限も必要です。クラウドなどで上限を取得できない場合は，保存先の仕様を確認してください。")
-                        .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("チャプター") {
                     Text(timeline.chapters.isEmpty ? "動画を追加してください。" : timeline.chapters).font(.system(.body, design: .monospaced)).textSelection(.enabled)
@@ -99,8 +102,8 @@ struct ExportView: View {
             Button("キャンセル", role: .cancel) {}
         } message: {
             Text(cleanCompleted
-                ? "このプロジェクトのアプリ内にある完成動画・チャプター・サムネイルを削除します。外部へ保存したコピーを確認してから実行してください。編集情報・素材・処理済み区間と外部の保存先は残ります。"
-                : "編集情報と完成ファイルは残ります。次回の出力では全区間を処理し直します。")
+                ? "アプリ内の完成品を削除します。編集内容・素材・外部のコピーは残ります。"
+                : "編集内容・素材・完成品は残ります。次回は再処理します。")
         }
     }
     private var exportControls: some View {
@@ -108,7 +111,7 @@ struct ExportView: View {
             if store.exporting {
                 ProgressView(value: store.progress)
                 Text(store.exportStatus).font(.subheadline)
-                Text("アプリを開いたままお待ちください。ほかのアプリへ移動すると中断し，完了した区間から次回にやり直せます。")
+                Text("書き出し中はアプリを開いたままにしてください。")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("中断する", role: .destructive) { store.cancelExport() }.frame(maxWidth: .infinity, minHeight: 44)
             } else {
