@@ -11,6 +11,8 @@
 - プロジェクトには既存のパイプラインがなかった。GitHub接続を選択する段階で，自動承認レビューが，対象リポジトリとAzureへのアクセス範囲の明示的な承認不足を理由に操作を拒否した。拒否された操作は迂回していない。
 - ローカルにAzure CLI・Azure DevOps用PATは確認できていない。初期接続をブラウザーで確認したが，パイプライン作成・CI起動・署名情報のAzureへの送信はまだ行っていない。
 
+その後，ユーザーからARTOFFICEだけの連携設定を進める承認を得て，GitHubの本人確認も完了した。既存のAzure Pipelines GitHub Appへ今回のリポジトリを追加する画面で，メタデータの読取りと，コード・Checks・コミット状態・Deployments・Issues・PRの読書きが要求されることを確認した。既存の別リポジトリの連携を変更せず，ARTOFFICEを追加する最終確定前に，この具体的な権限について確認を出している。まだ「Approve and install」は押していない。
+
 ## ソースに用意した構成
 
 ルートの`azure-pipelines.yml`は`trigger: none`・`pr: none`とし，手動実行だけを定義する。`task`は`all`・`media`・`storage`・`ui`・`device`から選ぶ。通常の検証は署名情報なしで行い，iPhoneとiPadを別の60分ジョブへ分ける。1並列枠で順番に実行し，既存の`ci.sh`へ`ARTOFFICE_TEST_FAMILY`を渡す。Codemagicで未指定の場合は従来どおり両端末を実行する。
@@ -31,7 +33,7 @@ Secure filesとSecret変数グループの利用権は今回のパイプライ�
 
 ## 次の操作
 
-1. 対象のGitHubリポジトリをAzureへ接続する範囲について承認を得た後，接続画面が実際に要求する権限を確認する。対象外のリポジトリまで広げない。
+1. GitHub Appが実際に要求する上記権限の確認を終え，ARTOFFICEだけを追加する。対象外のリポジトリの設定を変更しない。
 2. `codex/ios-native`の`azure-pipelines.yml`を既存YAMLとして選び，最初は署名なしの検証を実行する。対象コミットとRun IDを確定し，コンパイル・試験の失敗を修正する。
 3. 通常の実行・監視・成果物取得にはAzure CLIまたは公式REST APIの認証を整える。ブラウザーのサインイン状態をCLI認証済みとは扱わない。
 4. 必要な検証が通ったら，上記Secure filesとSecret変数を対象パイプラインに登録し，`device`を実行する。IPA・リビジョン・プロファイルを照合してからiPadへ上書きする。
