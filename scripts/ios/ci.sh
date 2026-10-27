@@ -95,6 +95,8 @@ PY
   done
   if [[ "$OVERALL_RESULT" != 0 ]]; then exit 1; fi
 elif [[ "${1:-}" == device ]]; then
+  echo 'Running model and persistence tests before signing'
+  (cd ios && swift test) 2>&1 | tee ios/build/core-tests.log
   python3 scripts/ios/sign.py
 else
   echo 'Usage: ci.sh check [all|media|storage|ui]|device' >&2; exit 2
