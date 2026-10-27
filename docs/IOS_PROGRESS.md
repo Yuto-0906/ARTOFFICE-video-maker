@@ -8,6 +8,8 @@
 
 UI改善のソースは`afdd525`でGitHubへ保存した。その後，ユーザー指定のスキルを再読込みし，無料枠のあるAzure Pipelinesも調べた。既存組織`yuto200596`・プロジェクト`ios-development`で，Microsoft-hostedの月1,800分が未消費であることを確認した。手動実行YAMLと既存署名処理への接続をソースに用意したが，GitHub接続の選択で自動承認レビューが権限範囲の承認不足を理由に拒否した。接続・実行は未完了である。詳細は[IOS_AZURE_PIPELINES.md](IOS_AZURE_PIPELINES.md)を参照する。
 
+その後，ARTOFFICEへのGitHub Appの具体的な権限承認と本人確認を終え，既存リポジトリの許可を変更せず今回のリポジトリを追加した。[Azure Run 1](https://dev.azure.com/yuto200596/ios-development/_build/results?buildId=1)・対象`c36b3f8`を起動し，Core25件とiOSアプリ・テストのコンパイルが成功した。iPhone系・iPad系の動作試験は実行中。AzureへのP12選択は自動承認レビューがCodemagic宛ての承認では不足するとして拒否したため，まだ署名情報は送信していない。
+
 ## 対象と完了条件
 
 実装の基準は[IOS_IMPLEMENTATION_PLAN.md](IOS_IMPLEMENTATION_PLAN.md)である。PC版との互換性は不要とし，端末内での編集保存，Codemagicでのビルド，iPhone 15と13インチM4 iPadの両方の最適化，合計5時間規模の動画処理を対象とする。

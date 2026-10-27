@@ -54,8 +54,6 @@ jobs:
       - job: SignedDevice
         displayName: Registered-device IPA
         timeoutInMinutes: 60
-        variables:
-          - group: artoffice-ios-signing
         steps:
           - checkout: self
             persistCredentials: false
@@ -67,12 +65,16 @@ jobs:
             name: profile
             inputs:
               secureFile: artoffice-app-development.mobileprovision
+          - task: DownloadSecureFile@1
+            name: password
+            inputs:
+              secureFile: artoffice-p12-password.txt
           - bash: python3 scripts/ios/azure-sign.py
             displayName: Verify profile and sign with the existing development identity
             env:
               ARTOFFICE_P12_FILE: $(certificate.secureFilePath)
               ARTOFFICE_PROFILE_FILE: $(profile.secureFilePath)
-              ARTOFFICE_DEVELOPMENT_P12_PASSWORD: $(ARTOFFICE_DEVELOPMENT_P12_PASSWORD)
+              ARTOFFICE_PASSWORD_FILE: $(password.secureFilePath)
           - task: CopyFiles@2
             condition: always()
             inputs:

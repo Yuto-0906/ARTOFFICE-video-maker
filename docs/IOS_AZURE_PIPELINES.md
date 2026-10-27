@@ -11,7 +11,11 @@
 - プロジェクトには既存のパイプラインがなかった。GitHub接続を選択する段階で，自動承認レビューが，対象リポジトリとAzureへのアクセス範囲の明示的な承認不足を理由に操作を拒否した。拒否された操作は迂回していない。
 - ローカルにAzure CLI・Azure DevOps用PATは確認できていない。初期接続をブラウザーで確認したが，パイプライン作成・CI起動・署名情報のAzureへの送信はまだ行っていない。
 
-その後，ユーザーからARTOFFICEだけの連携設定を進める承認を得て，GitHubの本人確認も完了した。既存のAzure Pipelines GitHub Appへ今回のリポジトリを追加する画面で，メタデータの読取りと，コード・Checks・コミット状態・Deployments・Issues・PRの読書きが要求されることを確認した。既存の別リポジトリの連携を変更せず，ARTOFFICEを追加する最終確定前に，この具体的な権限について確認を出している。まだ「Approve and install」は押していない。
+その後，ユーザーからARTOFFICEだけの連携設定と，GitHub Appが表示したメタデータの読取り・コード・Checks・コミット状態・Deployments・Issues・PRの読書きについて承認を得た。GitHubの本人確認も完了した。別リポジトリにも変更が及ぶ可能性を理由に自動レビューが一度確定を拒否したが，保存済みの設定で，そのリポジトリには既に同じ権限があることを読み取り確認した。既存の許可を変えず，ARTOFFICEの追加だけを確定した。
+
+パイプラインID1・`Yuto-0906.ARTOFFICE-video-maker`を作成し，[Run 1](https://dev.azure.com/yuto200596/ios-development/_build/results?buildId=1)を手動起動した。対象は`c36b3f8c0c72877fe50d694e3b15f8ca6d07ef79`。Core25件と，実機用アプリ・シミュレーターテストのコンパイルが成功し，iPhone系の試験に進んだ。選択された機種はiPhone 16e・iOS26.2であり，iPhone15実機の結果とは扱わない。全体の試験はまだ完了していない。通常の状態確認は既存GitHub CLIのChecks APIを使い，AzureのAPI認証がない詳細ログの確認だけブラウザーで補っている。
+
+Azure Secure filesへのP12選択は，自動承認レビューが，署名情報の送信承認はCodemagic宛てに限られるとして拒否した。指定スキル第4項には新しいCIへの送信を許可する指示があるが，今回のレビューではAzure宛ての明示承認を要求された。署名情報はまだAzureへ送っておらず，署名なしの検証を継続しながら，具体的な送信先と3種類の情報について確認する。
 
 ## ソースに用意した構成
 
@@ -19,29 +23,30 @@
 
 無料の標準プールにある`macOS-26`と，そのソフトウェア一覧で確認したXcode 26.6を明示した。現在Codemagicで使うXcode 27.1と同じ検証環境ではない。最低OS17以降のAPIを使うアプリのビルドと，提供されるiOSシミュレーターでの検証を行い，実際のSDK・シミュレーター機種・OSはCIログで記録する。OS27.0.1の実機受入は更新後のiPadで別に確認する。無料IntelランナーでのMetal利用可否も未確認であり，GPU試験の環境制約と製品不具合をログから切り分ける。
 
-`device`の場合だけ，変数グループ`artoffice-ios-signing`と次のSecure filesを使う構成にしている。これらはまだAzureへ登録していない。
+`device`の場合だけ，次の3種類のSecure filesを使う構成にしている。これらはまだAzureへ登録していない。パスワードも保護ファイルとして送り，実行時にAzureのSecret変数へ登録するため，ブラウザーの入力欄や会話へ値を表示する必要がない。
 
 | Azureの入力 | 内容 |
 |---|---|
 | Secure file：`artoffice-development.p12` | 既存Apple Development証明書と対応する秘密鍵 |
 | Secure file：`artoffice-app-development.mobileprovision` | 今回のBundle IDと登録済み2端末用の既存開発プロファイル |
-| Secret変数：`ARTOFFICE_DEVELOPMENT_P12_PASSWORD` | 既存P12の復号パスワード |
+| Secure file：`artoffice-p12-password.txt` | 既存P12の復号パスワード。実行時だけ`ARTOFFICE_DEVELOPMENT_P12_PASSWORD`としてSecret登録する |
 
-`DownloadSecureFile`で取得したファイルを`scripts/ios/azure-sign.py`がプロセス内で既存の署名スクリプトへ渡す。秘密データは引数・標準出力へ出さない。既存の`scripts/ios/sign.py`が一度だけ一時キーチェーンを作り，プロファイル照合，実機用ビルド，署名検証，IPA化，後始末を行う。証明書・プロファイルを再発行せず，既存の署名材料を再利用する。
+`DownloadSecureFile`で取得したファイルを`scripts/ios/azure-sign.py`がプロセス内で既存の署名スクリプトへ渡す。パスワードは子プロセスの開始前に，Azureの`task.setvariable`・`issecret=true`の制御コマンドでマスク対象へ登録する。通常のログ・引数へ値を表示しない。この処理をローカルで実行しないようAzureエージェントかも検査する。既存の`scripts/ios/sign.py`が一度だけ一時キーチェーンを作り，プロファイル照合，実機用ビルド，署名検証，IPA化，後始末を行う。証明書・プロファイルを再発行せず，既存の署名材料を再利用する。
 
-Secure filesとSecret変数グループの利用権は今回のパイプラインへ限定する。検証用のジョブへ署名情報を渡さない。公開する成果物はIPAと必要な診断・試験結果に絞り，作業領域全体やSecure filesを成果物へ含めない。
+Secure filesの利用権は今回のパイプラインへ限定する。検証用のジョブへ署名情報を渡さない。公開する成果物はIPAと必要な診断・試験結果に絞り，作業領域全体やSecure filesを成果物へ含めない。送信専用のローカル一時ファイルは登録後に削除し，元のP12とDPAPI保護したパスワードを維持する。
 
 ## 次の操作
 
-1. GitHub Appが実際に要求する上記権限の確認を終え，ARTOFFICEだけを追加する。対象外のリポジトリの設定を変更しない。
-2. `codex/ios-native`の`azure-pipelines.yml`を既存YAMLとして選び，最初は署名なしの検証を実行する。対象コミットとRun IDを確定し，コンパイル・試験の失敗を修正する。
-3. 通常の実行・監視・成果物取得にはAzure CLIまたは公式REST APIの認証を整える。ブラウザーのサインイン状態をCLI認証済みとは扱わない。
-4. 必要な検証が通ったら，上記Secure filesとSecret変数を対象パイプラインに登録し，`device`を実行する。IPA・リビジョン・プロファイルを照合してからiPadへ上書きする。
+1. 起動済みの署名なし検証を追跡し，コンパイル・試験の失敗を修正する。
+2. 署名情報のAzureへの送信承認を確認し，上記3ファイルを保護領域へ登録する。利用権は今回のパイプラインに限定する。
+3. 通常の状態確認は既存GitHub Checks APIを使う。Azure独自の実行・ログ・成果物APIを使える認証が整えば，それらもCLI・APIへ移す。ブラウザーのサインイン状態をCLI認証済みとは扱わない。
+4. 必要な検証が通ったら`device`を実行する。IPA・リビジョン・プロファイルを照合してからiPadへ上書きする。
 
-Windows側ではYAMLの構文，Python署名アダプターの構文，`bash -n scripts/ios/ci.sh`を確認した。Azure自身によるYAMLの展開とジョブ実行は未確認である。
+Windows側ではYAMLの構文，Python署名アダプターの構文，`bash -n scripts/ios/ci.sh`を確認した。最初のYAMLの展開と署名なしジョブの開始を確認したが，その後に修正したSecure files用アダプターの署名実行は未確認である。
 
 ## 確認した公式資料
 
 - [Microsoft-hosted agents](https://learn.microsoft.com/en-us/azure/devops/pipelines/agents/hosted?view=azure-devops)：標準プールのmacOSイメージ。
 - [Configure and pay for parallel jobs](https://learn.microsoft.com/en-us/azure/devops/pipelines/licensing/concurrent-jobs?view=azure-devops)：無料枠の条件。今回の利用権は実際の組織画面でも確認した。
 - [macOS 26のソフトウェア一覧](https://github.com/actions/runner-images/blob/main/images/macos/macos-26-Readme.md)：Xcode 26.6のパスとSDK。実ジョブのイメージ更新により変わるため，CIログも記録する。
+- [Azure Pipelinesの制御コマンド](https://learn.microsoft.com/en-us/azure/devops/pipelines/scripts/logging-commands?view=azure-devops)：エージェントによるSecret変数の登録とログのマスク。
