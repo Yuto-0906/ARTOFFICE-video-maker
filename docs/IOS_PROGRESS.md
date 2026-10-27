@@ -75,6 +75,14 @@ ARTOFFICE自身のアプリ領域から診断JSONを取得した。動画や写�
 
 この変更はソースと差分書式のみ確認しており，Swiftの試験・iOSコンパイルは未実行である。Codemagicの利用枠が回復したらCore試験と実機向けビルドを実行する。現在iPadへ導入済みの`f3aa9a8`には含まれない。
 
+### CI枠回復後に検証する電力・メモリ制御
+
+プラン第6節の低電力モード・メモリ警告への対応を追加した。[Appleの低電力モードの照会API](https://developer.apple.com/documentation/foundation/processinfo/islowpowermodeenabled)で現在値を読み，[メモリ警告の通知](https://developer.apple.com/documentation/uikit/uiapplication/didreceivememorywarningnotification)をアプリ起動時から監視する。低電力・serious以上の温度・直近60秒のメモリ警告のいずれかがある間は，新しく処理するフレームを1つに抑える。警告が再度届いた場合は60秒の抑制を延長する。実行中のフレームが終了してから上限を適用し，完成動画の解像度・フレームレートは変更しない。
+
+メモリ警告時は合成キューの処理境界で再生成可能なタイトルとCore Imageのキャッシュを解放する。編集情報・素材・処理済み区間は削除しない。診断の`budget`へ開始時の低電力状態と警告の累計を，`performanceWindows`へ各観測区間の低電力状態・警告の累計・観測した最小の処理上限`minimumInFlightFrameLimit`を追加した。警告の累計は当該アプリ起動後に監視した回数であり，OS全体の履歴ではない。低電力状態と処理上限も1秒間隔の観測値をまとめたもので，実際に保持した全バッファ数の計数ではない。新しい診断フィールドはOptionalとし，古い記録には値がないことを区別する。
+
+Coreには通常・低電力・高温・メモリ警告の上限制御の回帰試験，iOS側には独立した通知センターを使う警告受信・監視オブジェクトの解放の試験を追加した。`ios-media-check`でも後者を選択する。差分書式・参照名・`bash -n scripts/ios/ci.sh`の構文確認は通ったが，Swiftの試験・iOSコンパイル・低電力モードやメモリ警告の実機挙動は未検証である。CI利用枠の回復後に確認し，導入済みの`f3aa9a8`とは区別する。
+
 ## ソースとビルド環境
 
 - リポジトリ：[Yuto-0906/ARTOFFICE-video-maker](https://github.com/Yuto-0906/ARTOFFICE-video-maker)。

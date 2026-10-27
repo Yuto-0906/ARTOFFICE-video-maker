@@ -27,6 +27,7 @@ import SwiftUI
     private var outputLease: FolderLease?
     private var revision = 0
     init() {
+        _ = RuntimePressure.shared
         var support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("ARTOFFICE", isDirectory: true)
         #if DEBUG

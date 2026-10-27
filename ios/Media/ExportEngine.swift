@@ -105,7 +105,7 @@ enum ExportEngine {
         let clock = Date()
         var report = ExportReport(budget: DeviceBudget.current(), systemVersion: UIDevice.current.systemVersion,
             metalDevice: MTLCreateSystemDefaultDevice()?.name ?? "unavailable", resolution: project.resolution.rawValue, frameRate: project.frameRate.rawValue)
-        let sampler = PerformanceSampler()
+        let sampler = PerformanceSampler(budget: report.budget)
         defer {
             let sampled = sampler.snapshot()
             report.peakSampledResidentBytes = sampled.peak; report.performanceWindows = sampled.windows

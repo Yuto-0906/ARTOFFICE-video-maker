@@ -26,7 +26,8 @@ if [[ "${1:-check}" == check ]]; then
   case "${2:-all}" in
     all) ;;
     ui) TEST_SELECTION=(-only-testing:ARTOFFICEUITests/EditorUITests/testEditorNavigationAndSavedProjectSurviveRelaunch) ;;
-    media) TEST_SELECTION=(-only-testing:ARTOFFICETests/MediaExportTests/testShortRelinkIsRejectedBeforeCopyingMedia
+    media) TEST_SELECTION=(-only-testing:ARTOFFICETests/RuntimePressureTests
+                           -only-testing:ARTOFFICETests/MediaExportTests/testShortRelinkIsRejectedBeforeCopyingMedia
                            -only-testing:ARTOFFICETests/MediaExportTests/testOutputVolumeReadsRealFilesystemLimitWithoutWritingMedia
                            -only-testing:ARTOFFICETests/MediaExportTests/testTimelinePreviewUsesTrimmedTimelineAndDeviceRenderSize
                            -only-testing:ARTOFFICETests/MediaExportTests/testChunkReuseRejectsRedirectedAndInvalidCache

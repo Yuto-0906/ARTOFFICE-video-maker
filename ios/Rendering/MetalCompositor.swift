@@ -28,6 +28,7 @@ final class MetalCompositor: NSObject, AVVideoCompositing {
     private let titles = NSCache<NSString, CIImage>()
     private let lock = NSLock()
     private var generation = 0
+    private var memoryObserver: NSObjectProtocol?
     override init() {
         context = MTLCreateSystemDefaultDevice().map { device in
             CIContext(mtlDevice: device, options: [.cacheIntermediates: false,
@@ -35,7 +36,13 @@ final class MetalCompositor: NSObject, AVVideoCompositing {
                 .outputColorSpace: CGColorSpace(name: CGColorSpace.itur_709)!])
         }
         super.init(); titles.countLimit = 4
+        memoryObserver = NotificationCenter.default.addObserver(forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: nil) { [weak self] _ in
+            self?.queue.async(flags: .barrier) { [weak self] in
+                self?.titles.removeAllObjects(); self?.context?.clearCaches()
+            }
+        }
     }
+    deinit { if let memoryObserver { NotificationCenter.default.removeObserver(memoryObserver) } }
     func renderContextChanged(_ newRenderContext: AVVideoCompositionRenderContext) { titles.removeAllObjects() }
     func cancelAllPendingVideoCompositionRequests() {
         lock.lock(); generation += 1; lock.unlock()
@@ -47,7 +54,7 @@ final class MetalCompositor: NSObject, AVVideoCompositing {
         // Bound retained source and destination buffers before queueing GPU work. A hot
         // phone uses one frame; a cool iPad with sufficient memory can pipeline three.
         capacity.lock()
-        while inFlight >= budget.thermalInFlight { capacity.wait() }
+        while inFlight >= budget.currentInFlight { capacity.wait() }
         inFlight += 1
         capacity.unlock()
         queue.async { [self] in
