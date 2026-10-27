@@ -1,31 +1,37 @@
 # Azure Pipelinesでの追加検証
 
-更新日：2026年10月27日。
+更新日：2026年10月28日。
 
 `windows-ios-development`スキルの再読込みを受け，無料枠のあるAzure Pipelinesを追加の検証先として準備した。ソースはGitHubの`Yuto-0906/ARTOFFICE-video-maker`・`codex/ios-native`を継続使用する。既存のCodemagic設定は残す。GitHub Actionsや有料ランナーを起動する変更ではない。
 
-## 確認済みの利用枠と未設定の接続
+## 利用枠・接続・署名
 
-- Azure DevOps組織`yuto200596`・既存プロジェクト`ios-development`へサインイン済みだった。
-- Organization settings → Parallel jobsで，非公開プロジェクトのMicrosoft-hosted無料枠が1並列ジョブ・月1,800分，消費0分と表示された。Self-hosted枠とは区別して確認した。
-- プロジェクトには既存のパイプラインがなかった。GitHub接続を選択する段階で，自動承認レビューが，対象リポジトリとAzureへのアクセス範囲の明示的な承認不足を理由に操作を拒否した。拒否された操作は迂回していない。
-- ローカルにAzure CLI・Azure DevOps用PATは確認できていない。初期接続をブラウザーで確認したが，パイプライン作成・CI起動・署名情報のAzureへの送信はまだ行っていない。
+Azure DevOps組織`yuto200596`・既存プロジェクト`ios-development`を使う。開始前の組織画面では，非公開プロジェクトのMicrosoft-hosted無料枠は1並列ジョブ・月1,800分，消費0分だった。課金設定は変更していない。
 
-その後，ユーザーからARTOFFICEだけの連携設定と，GitHub Appが表示したメタデータの読取り・コード・Checks・コミット状態・Deployments・Issues・PRの読書きについて承認を得た。GitHubの本人確認も完了した。別リポジトリにも変更が及ぶ可能性を理由に自動レビューが一度確定を拒否したが，保存済みの設定で，そのリポジトリには既に同じ権限があることを読み取り確認した。既存の許可を変えず，ARTOFFICEの追加だけを確定した。
+ユーザーからARTOFFICEだけの連携とGitHub Appの具体的な権限について承認を得て，既存の別リポジトリの許可を変えずに今回のリポジトリを追加した。パイプラインID1は`Yuto-0906.ARTOFFICE-video-maker`である。接続時と署名情報送信時の自動承認レビューの拒否は，それぞれ対象を具体化した明示承認を得てから解消した。
 
-パイプラインID1・`Yuto-0906.ARTOFFICE-video-maker`を作成し，[Run 1](https://dev.azure.com/yuto200596/ios-development/_build/results?buildId=1)を手動起動した。対象は`c36b3f8c0c72877fe50d694e3b15f8ca6d07ef79`。Core25件と，実機用アプリ・シミュレーターテストのコンパイルが成功し，iPhone系の試験に進んだ。選択された機種はiPhone 16e・iOS26.2であり，iPhone15実機の結果とは扱わない。全体の試験はまだ完了していない。通常の状態確認は既存GitHub CLIのChecks APIを使い，AzureのAPI認証がない詳細ログの確認だけブラウザーで補っている。
+ユーザーが許可した既存P12・プロファイル・復号パスワードを下記のSecure filesへ登録し，それぞれのYAML利用権をパイプライン1だけへ設定した。「全パイプラインを許可」は使っていない。Azureの画面ではClassicパイプラインの扱いが別に表示されるため，ここで限定・確認した対象はYAML利用権である。送信用一時ファイル3件は削除し，元のP12・DPAPI保護したパスワード・プロファイルを維持した。
 
-Azure Secure filesへのP12選択は，自動承認レビューが，署名情報の送信承認はCodemagic宛てに限られるとして拒否した。指定スキル第4項には新しいCIへの送信を許可する指示があるが，今回のレビューではAzure宛ての明示承認を要求された。署名情報はまだAzureへ送っておらず，署名なしの検証を継続しながら，具体的な送信先と3種類の情報について確認する。
+ローカルにAzure CLI・Azure DevOps用PATは確認できていない。通常の状態確認は既存GitHub CLIのChecks APIを使う。Azure独自の起動・詳細ログ・成果物取得はAPI認証がないため，ブラウザーで補っている。ブラウザーのサインイン状態をCLI認証済みとは扱わない。
 
-その後，ユーザーからAzureへの3種類の送信許可を得た。下記のP12・プロファイル・復号パスワードをSecure filesへ登録し，それぞれのYAML利用権をパイプライン1だけに設定した。「全パイプラインを許可」は使っていない。送信に使ったローカルの一時コピー3件は削除し，元のP12・DPAPI保護したパスワード・プロファイルは維持した。プロファイルは導入済みiPad IPA内の実物とのバイト一致を確認した。Azureの画面にはClassicパイプラインの扱いも別に表示されるため，ここで限定・確認した対象はYAMLパイプラインの利用権である。
+## 実行結果
 
-Run 1のiPhoneジョブは18分45秒で失敗した。生ログからCore25件と，FolderVideoImport1件・MediaExport13件・RuntimePressure1件，iOS側合計15件の成功を確認した。失敗はUI試験の保存完了表示の確認で，2秒の一時表示を検出できなかった。保存完了の文字を次の編集まで残す修正を追加し，UIだけを選ぶ再検証を準備する。iPad側は同じRun内で実行中である。
+| 実行 | 対象・処理 | 結果 |
+|---|---|---|
+| [Run 1](https://dev.azure.com/yuto200596/ios-development/_build/results?buildId=1) | `c36b3f8`・all | 全体はUIで失敗。両ジョブでCore25件とアプリ・試験コンパイルが成功し，各シミュレーターでネイティブ15件も全件成功した |
+| Run 2・Run 3 | 途中のUI修正 | 最新修正を含めるため中止。成功した試験とは数えない |
+| [Run 4](https://dev.azure.com/yuto200596/ios-development/_build/results?buildId=4) | `fe8dfd3`・device | 4分23秒で署名成功。IPA・署名レポートを取得し，Windowsで照合後，M4 iPadへ1.1（ビルド2）を導入した |
+| [Run 5](https://dev.azure.com/yuto200596/ios-development/_build/results?buildId=5) | `fe8dfd3`・ui | 実行中。iPhone系・iPad系のUIだけを再検証する |
+
+Run 1のiPhone系はiPhone16e・iOS26.2，iPad系はiPad Air 13-inch（M4）・iOS26.4であり，iPhone15・iPad Proの実機結果とは扱わない。ネイティブ15件の内訳はFolderVideoImport1件・MediaExport13件・RuntimePressure1件である。iPhone側は短い保存完了表示の確認，iPad側は名前を消した後の空欄確認で失敗した。保存完了表示の保持，消去時のフォーカス維持，試験側の空欄判定・待機の調整を最新ソースへ反映した。Run 1以後，Core・Media・Rendering・ネイティブ試験のソースに差分はない。
+
+Run 4では既存Secure filesから一時キーチェーンへの取込み・Releaseビルド・署名検証・IPA生成が実際に成功した。リビジョンは`fe8dfd3f567d4cb40ae366e022797090c4ddbf4a`，`codesignVerified: true`，IPAのSHA-256は`ff8af5fffb1d991436104056e796b8506b2a507289f8f1625a9dd7a69567f1ae`だった。埋込みプロファイルは承認済み原本と一致し，対象iPadを含む。端末の読み戻しでも1.1・ビルド2・`ProfileValidated: true`を確認した。既存2プロジェクトの編集情報4ファイルも更新前後で一致した。新しいUIの操作確認は依頼中である。
 
 ## ソースに用意した構成
 
 ルートの`azure-pipelines.yml`は`trigger: none`・`pr: none`とし，手動実行だけを定義する。`task`は`all`・`media`・`storage`・`ui`・`device`から選ぶ。通常の検証は署名情報なしで行い，iPhoneとiPadを別の60分ジョブへ分ける。1並列枠で順番に実行し，既存の`ci.sh`へ`ARTOFFICE_TEST_FAMILY`を渡す。Codemagicで未指定の場合は従来どおり両端末を実行する。
 
-無料の標準プールにある`macOS-26`と，そのソフトウェア一覧で確認したXcode 26.6を明示した。現在Codemagicで使うXcode 27.1と同じ検証環境ではない。最低OS17以降のAPIを使うアプリのビルドと，提供されるiOSシミュレーターでの検証を行い，実際のSDK・シミュレーター機種・OSはCIログで記録する。OS27.0.1の実機受入は更新後のiPadで別に確認する。無料IntelランナーでのMetal利用可否も未確認であり，GPU試験の環境制約と製品不具合をログから切り分ける。
+無料の標準プールにある`macOS-26`と，そのソフトウェア一覧で確認したXcode 26.6を明示した。現在Codemagicで使うXcode 27.1と同じ検証環境ではない。最低OS17以降のAPIを使うアプリのビルドと，提供されるiOSシミュレーターでの検証を行い，実際のSDK・シミュレーター機種・OSはCIログで記録する。現在OS27.2のM4 iPadでの受入は別に確認する。無料Intelランナーでも今回のネイティブ15件は両ジョブで通ったが，実機の速度・音声・タッチ操作の証明とは区別する。
 
 `device`の場合だけ，登録済みの次の3種類のSecure filesを使う。パスワードも保護ファイルとして送り，実行時にAzureのSecret変数へ登録するため，ブラウザーの入力欄や会話へ値を表示する必要がない。
 
@@ -41,12 +47,11 @@ Secure filesの利用権は今回のパイプラインへ限定する。検証�
 
 ## 次の操作
 
-1. 起動済みの署名なし検証を追跡し，コンパイル・試験の失敗を修正する。
-2. iPad側のメディア試験の結果を確認し，保存完了表示の修正はUIに絞って再検証する。登録済みSecure filesは同じパイプラインで再利用する。
-3. 通常の状態確認は既存GitHub Checks APIを使う。Azure独自の実行・ログ・成果物APIを使える認証が整えば，それらもCLI・APIへ移す。ブラウザーのサインイン状態をCLI認証済みとは扱わない。
-4. 必要な検証が通ったら`device`を実行する。IPA・リビジョン・プロファイルを照合してからiPadへ上書きする。
+1. Run 5のUI試験をGitHub Checks APIで追跡し，失敗時だけ詳細ログから原因を調べる。
+2. 導入済みM4 iPadでフォルダー取込み，音声付き再生，名前・順番，保存再開，写真の操作，容量整理を確認する。iPhone実機は後日対応とする。
+3. Azure独自のAPI認証が整った場合は，起動・ログ・成果物取得もCLI・APIへ移す。
 
-Windows側ではYAMLの構文，Python署名アダプターの構文，`bash -n scripts/ios/ci.sh`を確認した。最初のYAMLの展開と署名なしジョブの開始を確認したが，その後に修正したSecure files用アダプターの署名実行は未確認である。
+Windowsでは差分書式，YAML・Python署名アダプターの構文，`bash -n scripts/ios/ci.sh`を確認済みである。署名経路はRun 4で実行確認済み，UI試験と実機受入は上記の範囲を残す。
 
 ## 確認した公式資料
 

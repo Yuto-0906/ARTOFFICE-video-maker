@@ -1,5 +1,13 @@
 # iOS版の実装・検証記録
 
+## 2026年10月28日：UI修正版をM4 iPadへ更新
+
+[Azure Run 4](https://dev.azure.com/yuto200596/ios-development/_build/results?buildId=4)で`fe8dfd3f567d4cb40ae366e022797090c4ddbf4a`のRelease署名ビルドが4分23秒で成功した。macOS上の`codesignVerified: true`とリビジョンを照合し，WindowsでもIPA構成検査，承認済みプロファイルとの一致，対象iPadの包含を確認した。IPAは`.cache/ios-signed/azure-build-4/ios-signed/ARTOFFICE-ios-development.ipa`，SHA-256は`ff8af5fffb1d991436104056e796b8506b2a507289f8f1625a9dd7a69567f1ae`である。
+
+00:59 JSTに同じM4 iPadへ上書きし，バージョン1.1・ビルド2・`ProfileValidated: true`を読み戻した。現在の接続情報は`iPad16,5`・OS27.2であり，旧版計測時の27.0.1とは区別する。更新前に2プロジェクトの`project.json`・`previous.json`だけを退避し，更新後の4ファイルがバイト単位で一致した。動画・写真の本体はコピーしていない。原本はGit除外済みの`.cache/ios-device-state/ui-update-preservation/`へ保持した。
+
+Azure Run 1は全体では失敗したが，両ジョブのCore25件と，各シミュレーターのネイティブ15件はすべて成功した。UIでは，iPhoneの短い保存完了表示と，iPadのイベント名消去・空欄確認で失敗した。その後，保存完了表示を次の編集まで保持し，名前を消す操作でフォーカスを強制変更しないよう修正した。試験側も遅い環境に合わせて待機と空欄の判定を調整した。最新ソースの[Run 5](https://dev.azure.com/yuto200596/ios-development/_build/results?buildId=5)はUIに絞って実行中である。新しいUIの実機確認もユーザーへ依頼中で，機能受入の完了とはまだ扱わない。iPhone実機は引き続き後日対応とする。
+
 ## 2026年10月27日：操作改善の追加ソース
 
 フォルダー・複数ファイルの取込み，Box・Google Driveの「ファイル」経由の入力，カット画面の音声設定，再生／一時停止の統合，サムネイルのドラッグ・ピンチ，動画確認とアプリ内の表示名・出演順の編集，保存完了表示，コピー済み素材と処理用キャッシュの整理を実装した。操作とデータ保持の方針，追加試験，実機確認手順は[IOS_UI_UPDATE.md](IOS_UI_UPDATE.md)にまとめた。
