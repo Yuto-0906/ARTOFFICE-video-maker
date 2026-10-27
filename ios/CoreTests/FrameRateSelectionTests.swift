@@ -39,7 +39,7 @@ final class FrameRateSelectionTests: XCTestCase {
         XCTAssertEqual(FrameRate.ntsc24.frameTicks, 25_025)
         XCTAssertEqual(FrameRate.fps25.frameTicks, 24_000)
         XCTAssertEqual(FrameRate.fps50.frameTicks, 12_000)
-        XCTAssertEqual(FrameRate.suggested(56.73), .fps60)
+        XCTAssertEqual(FrameRate.suggested(56.73), .ntsc60)
         XCTAssertEqual(clip(59.94).source.frameRateLabel, "59.94 fps")
         XCTAssertEqual(clip(60).source.frameRateLabel, "60 fps")
         XCTAssertEqual(clip(23.976).source.frameRateLabel, "23.976 fps")
