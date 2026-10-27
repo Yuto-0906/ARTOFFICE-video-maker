@@ -20,6 +20,7 @@ import SwiftUI
     @Published var storageBytes: Int64 = 0
     @Published var storageUsage = ProjectStorageUsage()
     @Published var saveFeedback: String?
+    @Published var showingSaveToast = false
     private var feedbackTask: Task<Void, Never>?
     let root: URL
     let jobs: URL
@@ -50,6 +51,7 @@ import SwiftUI
     func create() async {
         do {
             let fresh = Project(); try await repository.save(fresh); project = fresh; active = true
+            feedbackTask?.cancel(); saveFeedback = nil; showingSaveToast = false
             exportedFiles = []; outputLease = nil; diagnosticFile = nil; exportStatus = ""
         }
         catch { message = error.localizedDescription }
@@ -58,6 +60,7 @@ import SwiftUI
         do {
             let loaded = try await repository.load(project.id)
             self.project = loaded.project; active = true; exportedFiles = []; saveStatus = "保存済み"
+            feedbackTask?.cancel(); saveFeedback = nil; showingSaveToast = false
             let cacheDirectory = jobs.appendingPathComponent(project.id.uuidString)
             _ = try? await Task.detached { try ExportCacheStorage.remove(projectDirectory: cacheDirectory, partialOnly: true) }.value
             outputLease = nil; diagnosticFile = nil; exportStatus = ""
@@ -83,6 +86,7 @@ import SwiftUI
     }
     func changed() {
         guard active else { return }
+        feedbackTask?.cancel(); saveFeedback = nil; showingSaveToast = false
         saveStatus = "保存待ち"; saveTask?.cancel(); revision += 1
         let token = revision
         var snapshot = project; snapshot.modifiedAt = Date()
@@ -106,8 +110,8 @@ import SwiftUI
     }
     func saveNow() async {
         do {
-            try await flush(); feedbackTask?.cancel(); saveFeedback = "保存しました"
-            feedbackTask = Task { try? await Task.sleep(nanoseconds: 2_000_000_000); if !Task.isCancelled { saveFeedback = nil } }
+            try await flush(); feedbackTask?.cancel(); saveFeedback = "保存しました"; showingSaveToast = true
+            feedbackTask = Task { try? await Task.sleep(nanoseconds: 2_000_000_000); if !Task.isCancelled { showingSaveToast = false } }
         } catch { message = error.localizedDescription }
     }
     func refreshStorage() async {

@@ -10,6 +10,8 @@ UI改善のソースは`afdd525`でGitHubへ保存した。その後，ユーザ
 
 その後，ARTOFFICEへのGitHub Appの具体的な権限承認と本人確認を終え，既存リポジトリの許可を変更せず今回のリポジトリを追加した。[Azure Run 1](https://dev.azure.com/yuto200596/ios-development/_build/results?buildId=1)・対象`c36b3f8`を起動し，Core25件とiOSアプリ・テストのコンパイルが成功した。iPhone系・iPad系の動作試験は実行中。AzureへのP12選択は自動承認レビューがCodemagic宛ての承認では不足するとして拒否したため，まだ署名情報は送信していない。
 
+続いてユーザーからAzureへの3種類の署名情報送信を明示的に許可され，Secure filesへ登録した。YAML利用権はARTOFFICEのパイプライン1に限定し，送信用一時ファイルを削除した。Run 1のiPhone側はメディア等15件が通り，UIの保存完了表示の確認だけが失敗した。2秒の一時表示に加え，保存ボタン下の「保存しました」を次の編集まで残すよう修正し，UI専用の再検証を用意する。iPad側の結果と署名・導入は未確定である。
+
 ## 対象と完了条件
 
 実装の基準は[IOS_IMPLEMENTATION_PLAN.md](IOS_IMPLEMENTATION_PLAN.md)である。PC版との互換性は不要とし，端末内での編集保存，Codemagicでのビルド，iPhone 15と13インチM4 iPadの両方の最適化，合計5時間規模の動画処理を対象とする。

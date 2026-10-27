@@ -74,7 +74,7 @@ struct EditorView: View {
                         VStack(spacing: 1) {
                             Button("保存", systemImage: "square.and.arrow.down") { Task { await store.saveNow() } }
                                 .labelStyle(.titleAndIcon).disabled(store.busy).accessibilityIdentifier("saveProject")
-                            Text(store.saveStatus == "保存済み" ? "自動保存済み" : store.saveStatus).font(.caption2)
+                            Text(store.saveStatus == "保存済み" ? (store.saveFeedback ?? "自動保存済み") : store.saveStatus).font(.caption2)
                                 .foregroundStyle(.secondary).accessibilityIdentifier("saveStatus")
                         }
                     }
@@ -82,7 +82,7 @@ struct EditorView: View {
             }
             .overlay { if store.busy { ProgressView(store.importStatus.isEmpty ? "処理しています" : store.importStatus).padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16)) } }
             .overlay(alignment: .top) {
-                if let feedback = store.saveFeedback { Label(feedback, systemImage: "checkmark.circle.fill").font(.subheadline).padding(10).background(.regularMaterial, in: Capsule()).padding(.top, 8).allowsHitTesting(false) }
+                if store.showingSaveToast, let feedback = store.saveFeedback { Label(feedback, systemImage: "checkmark.circle.fill").font(.subheadline).padding(10).background(.regularMaterial, in: Capsule()).padding(.top, 8).allowsHitTesting(false).accessibilityHidden(true) }
             }
             .sheet(isPresented: $storage) { StorageOverview() }
         }

@@ -25,8 +25,7 @@ import XCTest
         let save = app.buttons["saveProject"]
         XCTAssertTrue(save.waitForExistence(timeout: 10))
         stage("save project"); save.tap()
-        XCTAssertTrue(app.staticTexts["保存しました"].waitForExistence(timeout: 5))
-        let saved = expectation(for: NSPredicate(format: "label CONTAINS %@", "自動保存済み"), evaluatedWith: app.staticTexts["saveStatus"])
+        let saved = expectation(for: NSPredicate(format: "label == %@", "保存しました"), evaluatedWith: app.staticTexts["saveStatus"])
         wait(for: [saved], timeout: 10)
         XCTAssertTrue(app.buttons["importVideoFolder"].exists)
         XCTAssertTrue(app.buttons["importVideoFiles"].exists)
