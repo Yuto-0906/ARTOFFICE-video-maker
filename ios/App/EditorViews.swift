@@ -52,6 +52,7 @@ struct LibraryView: View {
 struct EditorView: View {
     @EnvironmentObject private var store: AppStore
     @State private var tab = 0
+    @State private var storage = false
     var body: some View {
         NavigationStack {
             TabView(selection: $tab) {
@@ -68,117 +69,24 @@ struct EditorView: View {
                     Button("一覧", systemImage: "square.grid.2x2") { Task { await store.close() } }.disabled(store.busy || store.exporting)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { Task { do { try await store.flush() } catch { store.message = error.localizedDescription } } } label: {
-                        Label(store.saveStatus, systemImage: store.saveStatus == "保存済み" ? "checkmark.circle" : "arrow.triangle.2.circlepath")
-                            .font(.caption)
-                    }.disabled(store.busy).accessibilityIdentifier("saveProject")
-                }
-            }
-            .overlay { if store.busy { ProgressView(store.importStatus.isEmpty ? "処理しています" : store.importStatus).padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16)) } }
-        }
-    }
-}
-
-struct ImportView: View {
-    @EnvironmentObject private var store: AppStore
-    var edit: (UUID) -> Void
-    @State private var picker = false
-    @State private var copy = true
-    @State private var photos: [PhotosPickerItem] = []
-    @State private var relink: UUID?
-    @FocusState private var eventNameFocused: Bool
-    var body: some View {
-        List {
-            Section("イベント") {
-                HStack {
-                    TextField("イベント名", text: $store.project.name).accessibilityIdentifier("eventName")
-                        .autocorrectionDisabled()
-                        .focused($eventNameFocused).submitLabel(.done).onSubmit { eventNameFocused = false }
-                    if !store.project.name.isEmpty {
-                        Button("イベント名を消去", systemImage: "xmark.circle.fill") {
-                            store.project.name = ""; eventNameFocused = true
-                        }.labelStyle(.iconOnly).buttonStyle(.borderless).foregroundStyle(.secondary)
-                            .frame(width: 44, height: 44).accessibilityIdentifier("clearEventName")
-                    }
-                }
-                LabeledContent("アプリ内の素材", value: ByteCountFormatter.string(fromByteCount: store.storageBytes, countStyle: .file))
-            }
-            Section {
-                PhotosPicker(selection: $photos, maxSelectionCount: 100, matching: .videos, preferredItemEncoding: .current) {
-                    Label("写真から動画を追加", systemImage: "photo.on.rectangle.angled")
-                }.frame(minHeight: 44)
-                Button { relink = nil; picker = true } label: { Label("ファイルから動画を追加", systemImage: "folder") }.frame(minHeight: 44)
-                Toggle("ファイルをアプリ内にコピー", isOn: $copy)
-            } header: { Text("動画を読み込む") } footer: {
-                Text(copy ? "素材をこの端末に保持し，次回もそのまま編集できます。素材分の空き容量が必要です。" : "ファイルを参照して重複保存を減らします。外付けドライブなどは編集・出力時にも接続が必要です。写真からの動画は常にコピーします。")
-            }
-            if store.project.clips.isEmpty { Section { Text("「出演順_バンド名.mp4」のファイル名なら，順番と名前を読み取ります。画面でも変更できます。").foregroundStyle(.secondary) } }
-            ForEach(Array(store.project.groups.enumerated()), id: \.offset) { groupIndex, group in
-                Section("\(groupIndex + 1)　\(group[0].bandName)") {
-                    HStack {
-                        Button("上へ", systemImage: "arrow.up") { store.project.moveGroup(groupIndex, by: -1) }.disabled(groupIndex == 0)
-                        Spacer()
-                        Button("下へ", systemImage: "arrow.down") { store.project.moveGroup(groupIndex, by: 1) }.disabled(groupIndex + 1 >= store.project.groups.count)
-                    }.buttonStyle(.bordered).frame(minHeight: 44)
-                    ForEach(group) { clip in
-                        if let i = store.project.clips.firstIndex(where: { $0.id == clip.id }) {
-                            VStack(alignment: .leading, spacing: 10) {
-                                TextField("バンド名", text: $store.project.clips[i].bandName).font(.headline)
-                                Text(clip.source.fileName).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                                Text("\(Clock.text(clip.duration))・\(clip.source.width)×\(clip.source.height)\(clip.source.isHDR ? "・HDR→SDR" : "")\(clip.source.hasAudio ? "" : "・音声なし")")
-                                    .font(.caption).foregroundStyle(.secondary)
-                                if i > 0 { Toggle("前の動画と同じバンドとして連結", isOn: $store.project.clips[i].joinPrevious) }
-                                HStack {
-                                    Button("カット", systemImage: "scissors") { edit(clip.id) }.buttonStyle(.bordered)
-                                    Spacer()
-                                    Menu {
-                                        Button("素材を選び直す", systemImage: "arrow.triangle.2.circlepath") { relink = clip.id; picker = true }
-                                        Button("動画を外す", systemImage: "trash", role: .destructive) { store.project.removeClip(clip.id) }
-                                    } label: { Label("操作", systemImage: "ellipsis.circle").frame(minWidth: 44, minHeight: 44) }
-                                }
-                            }.padding(.vertical, 6)
+                    HStack(spacing: 14) {
+                        Button("容量", systemImage: "internaldrive") { storage = true }.disabled(store.busy || store.exporting)
+                        VStack(spacing: 1) {
+                            Button("保存", systemImage: "square.and.arrow.down") { Task { await store.saveNow() } }
+                                .disabled(store.busy).accessibilityIdentifier("saveProject")
+                            Text(store.saveStatus == "保存済み" ? "自動保存済み" : store.saveStatus).font(.caption2)
+                                .foregroundStyle(.secondary).accessibilityIdentifier("saveStatus")
                         }
                     }
                 }
             }
-        }
-        .fileImporter(isPresented: $picker, allowedContentTypes: [.movie], allowsMultipleSelection: relink == nil) { result in
-            switch result {
-            case .success(let urls): Task { await store.importVideos(urls, copy: copy, relink: relink) }
-            case .failure(let error): store.message = error.localizedDescription
+            .overlay { if store.busy { ProgressView(store.importStatus.isEmpty ? "処理しています" : store.importStatus).padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16)) } }
+            .overlay(alignment: .top) {
+                if let feedback = store.saveFeedback { Label(feedback, systemImage: "checkmark.circle.fill").font(.subheadline).padding(10).background(.regularMaterial, in: Capsule()).padding(.top, 8).allowsHitTesting(false) }
             }
-        }
-        .onChange(of: photos) { _, items in
-            guard !items.isEmpty else { return }
-            Task { await store.importPhotosVideos(items); photos = [] }
+            .sheet(isPresented: $storage) { StorageOverview() }
         }
     }
-}
-
-@MainActor final class PlaybackModel: ObservableObject {
-    @Published var player: AVPlayer?
-    @Published var current = 0.0
-    @Published var error: String?
-    private var lease: SourceLease?
-    private var observer: Any?
-    func load(_ clip: Clip, directory: URL) {
-        stop()
-        do {
-            lease = try SourceLease(source: clip.source, projectDirectory: directory)
-            let item = AVPlayerItem(url: lease!.url)
-            let budget = DeviceBudget.current()
-            item.preferredForwardBufferDuration = 2
-            item.preferredMaximumResolution = CGSize(width: budget.previewHeight * 16 / 9, height: budget.previewHeight)
-            let player = AVPlayer(playerItem: item); self.player = player
-            player.seek(to: CMTime(ticks: clip.start), toleranceBefore: .zero, toleranceAfter: .zero)
-            observer = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.05, preferredTimescale: 600), queue: .main) { [weak self] value in
-                guard value.isNumeric else { return }; self?.current = value.seconds
-            }
-        } catch { self.error = error.localizedDescription }
-    }
-    func seek(_ seconds: Double) { player?.pause(); player?.seek(to: CMTime(seconds: max(0, seconds), preferredTimescale: Clock.scale), toleranceBefore: .zero, toleranceAfter: .zero); current = max(0, seconds) }
-    func step(_ frames: Int) { player?.pause(); player?.currentItem?.step(byCount: frames) }
-    func stop() { player?.pause(); if let observer { player?.removeTimeObserver(observer) }; observer = nil; player = nil; lease = nil }
 }
 
 struct TrimView: View {
@@ -190,7 +98,7 @@ struct TrimView: View {
                 HStack(spacing: 0) {
                     List(store.project.clips) { clip in
                         Button { store.project.selectedClip = clip.id } label: {
-                            VStack(alignment: .leading) { Text(clip.bandName); Text(Clock.text(clip.duration)).font(.caption).foregroundStyle(.secondary) }.padding(.vertical, 8)
+                            VStack(alignment: .leading) { Text(clip.displayTitle); Text(Clock.text(clip.duration)).font(.caption).foregroundStyle(.secondary) }.padding(.vertical, 8)
                         }.listRowBackground(store.project.selectedClip == clip.id ? Color.accentColor.opacity(0.12) : Color.clear)
                     }.frame(width: 270)
                     Divider()
@@ -199,7 +107,7 @@ struct TrimView: View {
             } else {
                 VStack(spacing: 0) {
                     Picker("編集する動画", selection: Binding(get: { store.project.selectedClip ?? store.project.clips[0].id }, set: { store.project.selectedClip = $0 })) {
-                        ForEach(store.project.clips) { clip in Text(clip.bandName).tag(clip.id) }
+                        ForEach(store.project.clips) { clip in Text(clip.displayTitle).tag(clip.id) }
                     }.pickerStyle(.menu).frame(minHeight: 48)
                     if let id = store.project.selectedClip ?? store.project.clips.first?.id { ClipEditor(id: id).id(id) }
                 }
@@ -214,23 +122,52 @@ struct ClipEditor: View {
     @StateObject private var playback = PlaybackModel()
     @State private var startText = ""
     @State private var endText = ""
+    @Environment(\.scenePhase) private var scenePhase
     var index: Int? { store.project.clips.firstIndex { $0.id == id } }
     var body: some View {
         if let i = index {
             let clip = store.project.clips[i]
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    VideoPlayer(player: playback.player).aspectRatio(16 / 9, contentMode: .fit).background(.black).clipShape(RoundedRectangle(cornerRadius: 12))
+                    ZStack {
+                        EmbeddedMoviePlayer(player: playback.player)
+                        if playback.loading { ProgressView("動画を開いています").tint(.white).foregroundStyle(.white) }
+                    }.aspectRatio(16 / 9, contentMode: .fit).background(.black).clipShape(RoundedRectangle(cornerRadius: 12))
                     if let error = playback.error { Text(error).foregroundStyle(.red) }
                     Text(Clock.text(Clock.ticks(playback.current), precise: true)).font(.title3.monospacedDigit()).frame(maxWidth: .infinity)
                     Slider(value: Binding(get: { min(Clock.seconds(clip.source.duration), playback.current) }, set: { playback.seek($0) }), in: 0...max(0.01, Clock.seconds(clip.source.duration)))
                         .accessibilityLabel("動画の再生位置")
                     HStack {
                         Button("1フレーム戻る", systemImage: "backward.end") { playback.step(-1) }.labelStyle(.iconOnly)
-                        Spacer(); Button("再生", systemImage: "play.fill") { playback.player?.play() }
-                        Button("停止", systemImage: "pause.fill") { playback.player?.pause() }; Spacer()
+                        Spacer()
+                        Button(playback.isPlaying ? "一時停止" : "再生", systemImage: playback.isPlaying ? "pause.fill" : "play.fill") { playback.toggle() }
+                            .frame(minWidth: 100, minHeight: 44).accessibilityIdentifier("togglePlayback").disabled(playback.player == nil)
+                        Spacer()
                         Button("1フレーム進む", systemImage: "forward.end") { playback.step(1) }.labelStyle(.iconOnly)
                     }.buttonStyle(.bordered).controlSize(.large)
+                    GroupBox("名前と並び順") {
+                        VStack(alignment: .leading, spacing: 12) {
+                            TextField("動画の表示名", text: Binding(get: { store.project.clips[i].displayName ?? (clip.source.fileName as NSString).deletingPathExtension }, set: { store.project.clips[i].displayName = $0 }))
+                                .textFieldStyle(.roundedBorder).accessibilityIdentifier("clipDisplayName")
+                            Text("元のファイル：\(clip.source.fileName)").font(.caption).foregroundStyle(.secondary)
+                            if !clip.joinPrevious {
+                                TextField("動画に表示するバンド名", text: $store.project.clips[i].bandName).textFieldStyle(.roundedBorder)
+                                    .accessibilityIdentifier("clipBandName")
+                                Button("表示名をバンド名にも使う") {
+                                    store.project.clips[i].bandName = Naming.parse(clip.displayTitle + ".mp4")?.band ?? clip.displayTitle
+                                }.buttonStyle(.bordered)
+                            } else { Text("バンド名は連結した動画の先頭で変更できます。").font(.caption).foregroundStyle(.secondary) }
+                            if let group = store.project.groups.firstIndex(where: { $0.contains(where: { $0.id == id }) }) {
+                                HStack {
+                                    Text("出演順 \(group + 1) / \(store.project.groups.count)")
+                                    Spacer()
+                                    Button("前へ", systemImage: "arrow.up") { store.project.moveGroup(group, by: -1) }.disabled(group == 0)
+                                    Button("後へ", systemImage: "arrow.down") { store.project.moveGroup(group, by: 1) }.disabled(group + 1 == store.project.groups.count)
+                                }.buttonStyle(.bordered).frame(minHeight: 44)
+                            }
+                            Text("表示名とバンド名はこのプロジェクト内の名前です。元の動画やクラウド上のファイル名は変更しません。").font(.caption).foregroundStyle(.secondary)
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    }
                     GroupBox("開始位置") {
                         VStack {
                             Slider(value: Binding(get: { Clock.seconds(clip.start) }, set: { store.project.clips[i].trimStart(Clock.ticks($0)); playback.seek(Clock.seconds(store.project.clips[i].start)) }), in: 0...max(0.01, Clock.seconds(clip.source.duration)))
@@ -247,7 +184,7 @@ struct ClipEditor: View {
                             Slider(value: Binding(get: { Clock.seconds(clip.end) }, set: { store.project.clips[i].trimEnd(Clock.ticks($0)); playback.seek(Clock.seconds(store.project.clips[i].end)) }), in: 0...max(0.01, Clock.seconds(clip.source.duration)))
                             HStack {
                                 Button("現在位置を設定") { store.project.clips[i].trimEnd(Clock.ticks(playback.current)) }
-                                Spacer(); Button("終了前を確認") { playback.seek(max(Clock.seconds(clip.start), Clock.seconds(clip.end) - 3)); playback.player?.play() }
+                                Spacer(); Button("終了前を確認") { playback.seek(max(Clock.seconds(clip.start), Clock.seconds(clip.end) - 3)); playback.play() }
                             }.buttonStyle(.bordered).frame(minHeight: 44)
                             TextField("0:00:00.000", text: $endText).textFieldStyle(.roundedBorder).keyboardType(.numbersAndPunctuation)
                                 .onSubmit { if let value = parseTime(endText) { store.project.clips[i].trimEnd(value) } else { store.message = "時刻は0:00:00.000の形式で入力してください。" }; syncText() }
@@ -256,10 +193,11 @@ struct ClipEditor: View {
                     Text("残す長さ　\(Clock.text(clip.duration, precise: true))").font(.headline)
                 }.padding().frame(maxWidth: 1000).frame(maxWidth: .infinity)
             }
-            .onAppear { playback.load(clip, directory: store.directory); syncText() }
+            .task(id: clip.source) { syncText(); await playback.load(clip, directory: store.directory) }
             .onDisappear { playback.stop() }
-            .onChange(of: clip.start) { _, _ in syncText() }
-            .onChange(of: clip.end) { _, _ in syncText() }
+            .onChange(of: clip.start) { _, _ in syncText(); playback.updateRange(clip) }
+            .onChange(of: clip.end) { _, _ in syncText(); playback.updateRange(clip) }
+            .onChange(of: scenePhase) { _, phase in if phase != .active { playback.pause() } }
         }
     }
     func syncText() { if let i = index { startText = Clock.text(store.project.clips[i].start, precise: true); endText = Clock.text(store.project.clips[i].end, precise: true) } }

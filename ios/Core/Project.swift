@@ -35,7 +35,7 @@ enum FrameRate: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-struct MediaSource: Codable, Equatable {
+struct MediaSource: Codable, Hashable {
     var fileName: String
     var relativePath: String?
     var bookmark: Data?
@@ -48,6 +48,7 @@ struct MediaSource: Codable, Equatable {
     var hasAudio: Bool
     var isHDR: Bool
     var importIdentity: String? = nil
+    var folderBookmark: Data? = nil
 }
 
 struct Clip: Codable, Identifiable, Equatable {
@@ -57,6 +58,11 @@ struct Clip: Codable, Identifiable, Equatable {
     var start: Int64 = 0
     var end: Int64
     var joinPrevious = false
+    var displayName: String? = nil
+    var displayTitle: String {
+        if let name = displayName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty { return name }
+        return (source.fileName as NSString).deletingPathExtension
+    }
     init(source: MediaSource, bandName: String) {
         self.source = source; self.bandName = bandName; self.end = source.duration
     }

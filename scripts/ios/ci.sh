@@ -27,6 +27,9 @@ if [[ "${1:-check}" == check ]]; then
     all) ;;
     ui) TEST_SELECTION=(-only-testing:ARTOFFICEUITests/EditorUITests/testEditorNavigationAndSavedProjectSurviveRelaunch) ;;
     media) TEST_SELECTION=(-only-testing:ARTOFFICETests/RuntimePressureTests
+                           -only-testing:ARTOFFICETests/FolderVideoImportTests
+                           -only-testing:ARTOFFICETests/MediaExportTests/testClipPlaybackActivatesMovieAudioAndUsesSingleToggle
+                           -only-testing:ARTOFFICETests/MediaExportTests/testThumbnailDragExportsTheSelectedPartAtSixteenByNine
                            -only-testing:ARTOFFICETests/MediaExportTests/testShortRelinkIsRejectedBeforeCopyingMedia
                            -only-testing:ARTOFFICETests/MediaExportTests/testOutputVolumeReadsRealFilesystemLimitWithoutWritingMedia
                            -only-testing:ARTOFFICETests/MediaExportTests/testTimelinePreviewUsesTrimmedTimelineAndDeviceRenderSize

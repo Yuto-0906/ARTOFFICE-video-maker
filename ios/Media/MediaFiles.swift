@@ -13,26 +13,35 @@ extension CMTime {
 /// Keeps a security-scoped resource alive for the whole playback/export，not only the import.
 final class SourceLease {
     let url: URL
-    private let scoped: Bool
+    private let scopes: [URL]
     init(source: MediaSource, projectDirectory: URL) throws {
-        if let relative = source.relativePath {
-            guard Project.safeMediaPath(relative) else { throw AppError.message("素材パスが不正です。") }
-            url = projectDirectory.appendingPathComponent(relative); scoped = false
-            let actual = url.resolvingSymlinksInPath().standardizedFileURL.path
-            guard actual.hasPrefix(projectDirectory.resolvingSymlinksInPath().standardizedFileURL.path + "/") else {
-                throw AppError.message("素材の保存先がプロジェクトの外にあります。")
+        var opened: [URL] = []
+        do {
+            var target: URL
+            if let relative = source.relativePath {
+                guard Project.safeMediaPath(relative) else { throw AppError.message("素材パスが不正です。") }
+                target = projectDirectory.appendingPathComponent(relative)
+                let actual = target.resolvingSymlinksInPath().standardizedFileURL.path
+                guard actual.hasPrefix(projectDirectory.resolvingSymlinksInPath().standardizedFileURL.path + "/") else {
+                    throw AppError.message("素材の保存先がプロジェクトの外にあります。")
+                }
+            } else if let bookmark = source.bookmark {
+                var stale = false
+                if let folder = source.folderBookmark {
+                    let parent = try URL(resolvingBookmarkData: folder, options: .withoutUI, bookmarkDataIsStale: &stale)
+                    if parent.startAccessingSecurityScopedResource() { opened.append(parent) }
+                }
+                let selected = try URL(resolvingBookmarkData: bookmark, options: .withoutUI, bookmarkDataIsStale: &stale)
+                if selected.startAccessingSecurityScopedResource() { opened.append(selected) }
+                target = try CoordinatedFileAccess.prepare(selected)
+            } else { throw AppError.message("素材の参照がありません。") }
+            guard FileManager.default.isReadableFile(atPath: target.path) else {
+                throw AppError.message("\(source.fileName)を開けません。「素材を選び直す」で復旧してください。")
             }
-        } else if let bookmark = source.bookmark {
-            var stale = false
-            url = try URL(resolvingBookmarkData: bookmark, options: .withoutUI, bookmarkDataIsStale: &stale)
-            scoped = url.startAccessingSecurityScopedResource()
-        } else { throw AppError.message("素材の参照がありません。") }
-        guard FileManager.default.isReadableFile(atPath: url.path) else {
-            if scoped { url.stopAccessingSecurityScopedResource() }
-            throw AppError.message("\(source.fileName)を開けません。「素材を選び直す」で復旧してください。")
-        }
+            url = target; scopes = opened
+        } catch { for value in opened.reversed() { value.stopAccessingSecurityScopedResource() }; throw error }
     }
-    deinit { if scoped { url.stopAccessingSecurityScopedResource() } }
+    deinit { for value in scopes.reversed() { value.stopAccessingSecurityScopedResource() } }
 }
 
 enum MediaFiles {
@@ -65,12 +74,14 @@ enum MediaFiles {
                            hasAudio: !(try await asset.loadTracks(withMediaType: .audio)).isEmpty, isHDR: hdr)
     }
     static func importVideo(_ url: URL, copy: Bool, directory: URL, ownedTemporary: Bool = false,
-                            selectionIdentity: String? = nil, existingIDs: Set<String> = [], minimumDuration: Int64 = 0) async throws -> Clip {
+                            selectionIdentity: String? = nil, existingIDs: Set<String> = [], minimumDuration: Int64 = 0, folderBookmark: Data? = nil) async throws -> Clip {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         try Task.checkCancellation()
         let original = url.lastPathComponent
-        let metadata = try await probe(url, relativePath: nil, bookmark: nil)
+        let readable: URL
+        if ownedTemporary { readable = url } else { readable = try CoordinatedFileAccess.prepare(url) }
+        let metadata = try await probe(readable, relativePath: nil, bookmark: nil)
         guard metadata.duration >= minimumDuration else {
             throw AppError.message("元のカット範囲より短い動画です。対応する素材を選んでください。")
         }
@@ -89,7 +100,7 @@ enum MediaFiles {
             let dest = directory.appendingPathComponent(relative)
             do {
                 if ownedTemporary { try FileManager.default.moveItem(at: url, to: dest) }
-                else { try FileManager.default.copyItem(at: url, to: dest) }
+                else { try CoordinatedFileAccess.read(url) { try FileManager.default.copyItem(at: $0, to: dest) } }
                 try Task.checkCancellation()
             }
             catch { try? FileManager.default.removeItem(at: dest); throw error }
@@ -97,6 +108,7 @@ enum MediaFiles {
             source.modifiedAt = try dest.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
         } else {
             source.bookmark = try url.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)
+            source.folderBookmark = folderBookmark
             // Prove the persisted reference resolves before committing it to the project.
             let lease = try SourceLease(source: source, projectDirectory: directory)
             guard lease.url.standardizedFileURL == url.standardizedFileURL else { throw AppError.message("素材の参照を保存できません。コピーして取り込んでください。") }
@@ -117,7 +129,7 @@ enum MediaFiles {
     static func importPhoto(_ url: URL, directory: URL) throws -> PhotoCrop {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-        let image = try photo(url)
+        let image = try CoordinatedFileAccess.read(url) { try photo($0) }
         let relative = "Media/\(UUID().uuidString).jpg"
         try FileManager.default.createDirectory(at: directory.appendingPathComponent("Media"), withIntermediateDirectories: true)
         guard let data = image.jpegData(compressionQuality: 0.95) else { throw AppError.message("写真の保存に失敗しました。") }

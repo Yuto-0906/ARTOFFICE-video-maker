@@ -18,6 +18,9 @@ import SwiftUI
     @Published var exportedFiles: [URL] = []
     @Published private(set) var diagnosticFile: URL?
     @Published var storageBytes: Int64 = 0
+    @Published var storageUsage = ProjectStorageUsage()
+    @Published var saveFeedback: String?
+    private var feedbackTask: Task<Void, Never>?
     let root: URL
     let jobs: URL
     let repository: ProjectRepository
@@ -55,6 +58,8 @@ import SwiftUI
         do {
             let loaded = try await repository.load(project.id)
             self.project = loaded.project; active = true; exportedFiles = []; saveStatus = "保存済み"
+            let cacheDirectory = jobs.appendingPathComponent(project.id.uuidString)
+            _ = try? await Task.detached { try ExportCacheStorage.remove(projectDirectory: cacheDirectory, partialOnly: true) }.value
             outputLease = nil; diagnosticFile = nil; exportStatus = ""
             storageBytes = await repository.allocatedBytes(project.id)
             if loaded.recovered { message = "直前の正常な保存データから復旧しました。内容を確認してください。" }
@@ -99,6 +104,54 @@ import SwiftUI
         do { try await repository.save(snapshot, revision: revision); saveStatus = "保存済み" }
         catch { saveStatus = "保存失敗"; throw error }
     }
+    func saveNow() async {
+        do {
+            try await flush(); feedbackTask?.cancel(); saveFeedback = "保存しました"
+            feedbackTask = Task { try? await Task.sleep(nanoseconds: 2_000_000_000); if !Task.isCancelled { saveFeedback = nil } }
+        } catch { message = error.localizedDescription }
+    }
+    func refreshStorage() async {
+        let snapshot = project, directory = self.directory, jobs = self.jobs
+        do {
+            let value = try await Task.detached { try ProjectStorageInspector.inspect(project: snapshot, directory: directory, jobs: jobs) }.value
+            if project.id == snapshot.id { storageUsage = value; storageBytes = await repository.allocatedBytes(snapshot.id) }
+        } catch { message = error.localizedDescription }
+    }
+    func importFolder(_ folder: URL, copy: Bool) async {
+        guard !busy, !exporting else { return }
+        let scoped = folder.startAccessingSecurityScopedResource()
+        defer { if scoped { folder.stopAccessingSecurityScopedResource() } }
+        busy = true; importStatus = "フォルダー内の動画を探しています。クラウドの場合は接続を確認しています。"
+        do {
+            var bookmark: Data?
+            if !copy { bookmark = try folder.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil) }
+            let urls = try await Task.detached { try FolderVideoImport.scan(folder) }.value
+            busy = false
+            await importVideos(urls, copy: copy, folderBookmark: bookmark)
+        } catch { busy = false; importStatus = ""; message = error.localizedDescription }
+    }
+    func removeClip(_ id: UUID, deleteCopy: Bool) async {
+        guard !busy, !exporting, let clip = project.clips.first(where: { $0.id == id }) else { return }
+        busy = true; defer { busy = false }
+        let previous = project
+        project.removeClip(id)
+        do { try await flush() } catch { project = previous; message = error.localizedDescription; return }
+        if deleteCopy, let path = clip.source.relativePath {
+            do { _ = try await repository.removeUnusedMedia(project.id, onlyPaths: [path]) }
+            catch { message = error.localizedDescription }
+        }
+        await refreshStorage()
+    }
+    func removeUnusedMedia() async {
+        guard !busy, !exporting else { return }
+        busy = true; defer { busy = false }
+        do {
+            try await flush()
+            let count = try await repository.removeUnusedMedia(project.id)
+            message = count == 0 ? "削除できる未使用素材はありません。" : "未使用の素材を\(count)ファイル整理しました。"
+            await refreshStorage()
+        } catch { message = error.localizedDescription }
+    }
     func duplicate(_ value: Project) async {
         guard !busy else { return }; busy = true; defer { busy = false }
         do { _ = try await repository.duplicate(value); await refresh() } catch { message = error.localizedDescription }
@@ -111,7 +164,7 @@ import SwiftUI
             await refresh()
         } catch { message = error.localizedDescription }
     }
-    func importVideos(_ urls: [URL], copy: Bool, relink: UUID? = nil, ownedTemporary: Bool = false, selectionIdentity: String? = nil) async {
+    func importVideos(_ urls: [URL], copy: Bool, relink: UUID? = nil, ownedTemporary: Bool = false, selectionIdentity: String? = nil, folderBookmark: Data? = nil) async {
         guard !busy, !exporting else { return }
         busy = true; defer { busy = false; importStatus = "" }
         let directory = self.directory
@@ -127,7 +180,7 @@ import SwiftUI
                 let minimumDuration = relink.flatMap { id in project.clips.first(where: { $0.id == id })?.end } ?? 0
                 let clip = try await Task.detached(priority: .userInitiated) {
                     try await MediaFiles.importVideo(url, copy: copy, directory: directory, ownedTemporary: ownedTemporary,
-                                                    selectionIdentity: selectionIdentity, existingIDs: existing, minimumDuration: minimumDuration)
+                                                    selectionIdentity: selectionIdentity, existingIDs: existing, minimumDuration: minimumDuration, folderBookmark: folderBookmark)
                 }.value
                 if let id = relink, let i = project.clips.firstIndex(where: { $0.id == id }) {
                     guard clip.source.duration >= project.clips[i].end else { throw AppError.message("元のカット範囲より短い動画です。対応する素材を選んでください。") }
@@ -214,18 +267,12 @@ import SwiftUI
     }
     func clearExportCache() async {
         guard !exporting, !busy else { return }
+        busy = true; defer { busy = false }
         let directory = jobs.appendingPathComponent(project.id.uuidString)
         do {
-            if FileManager.default.fileExists(atPath: directory.path) {
-                // Completed files can be the user's only copy. Delete only chunks/journals，not Completed/.
-                let entries = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
-                for job in entries {
-                    let files = try FileManager.default.contentsOfDirectory(at: job, includingPropertiesForKeys: nil)
-                    for url in files where url.pathExtension == "mp4" || url.lastPathComponent == "journal.json" {
-                        try FileManager.default.removeItem(at: url)
-                    }
-                }
-            }
+            _ = try await Task.detached { try ExportCacheStorage.remove(projectDirectory: directory) }.value
+            exportStatus = "処理用キャッシュを削除しました。編集内容・素材・完成品は残っています。"
+            await refreshStorage()
         } catch { message = error.localizedDescription }
     }
 }

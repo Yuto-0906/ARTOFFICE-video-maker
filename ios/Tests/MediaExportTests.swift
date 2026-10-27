@@ -1,9 +1,51 @@
 import AVFoundation
 import CoreGraphics
+import UIKit
 import XCTest
 @testable import ARTOFFICE
 
 final class MediaExportTests: XCTestCase {
+    func testThumbnailDragExportsTheSelectedPartAtSixteenByNine() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let media = root.appendingPathComponent("Media")
+        try FileManager.default.createDirectory(at: media, withIntermediateDirectories: true)
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.opaque = true
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 1600, height: 1600), format: format).image { context in
+            UIColor.red.setFill(); context.fill(CGRect(x: 0, y: 0, width: 1600, height: 800))
+            UIColor.blue.setFill(); context.fill(CGRect(x: 0, y: 800, width: 1600, height: 800))
+        }
+        try XCTUnwrap(image.jpegData(compressionQuality: 1)).write(to: media.appendingPathComponent("photo.jpg"))
+        let original = PhotoCrop(relativePath: "Media/photo.jpg")
+        for (name, drag, channel) in [("top", 1000.0, 0), ("bottom", -1000.0, 2)] {
+            let crop = original.dragged(x: 0, y: drag, viewportWidth: 400, width: 1600, height: 1600)
+            let output = root.appendingPathComponent(name + ".jpg")
+            try MediaFiles.exportPhoto(crop, directory: root, output: output)
+            let result = try XCTUnwrap(MediaFiles.photo(output).cgImage)
+            XCTAssertEqual(result.width, 1920); XCTAssertEqual(result.height, 1080)
+            let pixel = try pixelColor(result, x: 960, y: 540)
+            XCTAssertGreaterThan(pixel[channel], 200); XCTAssertLessThan(pixel[channel == 0 ? 2 : 0], 40)
+        }
+    }
+    @MainActor func testClipPlaybackActivatesMovieAudioAndUsesSingleToggle() async throws {
+        executionTimeAllowance = 600
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let media = root.appendingPathComponent("Media")
+        try FileManager.default.createDirectory(at: media, withIntermediateDirectories: true)
+        let url = media.appendingPathComponent("preview.mov")
+        try await toneFixture(url: url, red: true, frequency: 440)
+        let source = try await MediaFiles.probe(url, relativePath: "Media/preview.mov", bookmark: nil)
+        XCTAssertTrue(source.hasAudio)
+        let playback = PlaybackModel(); defer { playback.stop() }
+        await playback.load(Clip(source: source, bandName: "音声確認"), directory: root)
+        XCTAssertNil(playback.error); XCTAssertNotNil(playback.player)
+        XCTAssertEqual(playback.player?.isMuted, false); XCTAssertEqual(playback.player?.volume, 1)
+        playback.toggle(); XCTAssertTrue(playback.isPlaying)
+        XCTAssertEqual(AVAudioSession.sharedInstance().category, .playback)
+        XCTAssertEqual(AVAudioSession.sharedInstance().mode, .moviePlayback)
+        playback.toggle(); XCTAssertFalse(playback.isPlaying)
+    }
     func testOutputVolumeReadsRealFilesystemLimitWithoutWritingMedia() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

@@ -73,6 +73,7 @@ struct ExportReport: Codable {
     var reusedChunkIndices: [Int] = []
     var elapsedSeconds: Double = 0
     var finalizationSeconds: Double = 0
+    var cacheCleanupNote: String? = nil
 }
 
 enum ExportEngine {
@@ -219,6 +220,8 @@ enum ExportEngine {
             try ExportHistory.record(files: generated, job: job, destination: destination)
             report.elapsedSeconds = Date().timeIntervalSince(clock); report.finalizationSeconds = Date().timeIntervalSince(finalizeStart)
             report.status = "completed"
+            do { try ExportCacheStorage.retainRecent(projectDirectory: job.deletingLastPathComponent(), currentJob: job.lastPathComponent) }
+            catch { report.cacheCleanupNote = "古い処理用キャッシュを整理できませんでした。保存容量の画面から再実行できます。" }
             let reportURL = job.appendingPathComponent("performance.json")
             // Once all output files and their receipt are committed，a diagnostic write
             // failure must not remove the user's five-hour completed video.

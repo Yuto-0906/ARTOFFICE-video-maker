@@ -7,9 +7,11 @@ import SwiftUI
     @Published private(set) var duration: Double = 0
     @Published private(set) var loading = true
     @Published private(set) var error: String?
+    @Published private(set) var isPlaying = false
     private var composition: RenderComposition?
     private var observer: Any?
     private var statusObserver: NSKeyValueObservation?
+    private var stateObserver: NSKeyValueObservation?
     private var generation = UUID()
 
     func load(project: Project, directory: URL) async {
@@ -19,7 +21,7 @@ import SwiftUI
             let timeline = try Timeline(project)
             guard let end = timeline.chunks(rate: project.frameRate).last?.end else { throw AppError.message("動画を追加してください。") }
             let budget = DeviceBudget.current()
-            let prepared = try await CompositionBuilder.build(project: project, directory: directory, previewHeight: Int(budget.previewHeight))
+            let prepared = try await Task.detached { try await CompositionBuilder.build(project: project, directory: directory, previewHeight: Int(budget.previewHeight)) }.value
             try Task.checkCancellation()
             guard generation == operation else { return }
             let item = AVPlayerItem(asset: prepared.asset)
@@ -29,8 +31,12 @@ import SwiftUI
             item.forwardPlaybackEndTime = CMTime(ticks: end)
             composition = prepared // Keep source security scopes for the whole playback.
             let player = AVPlayer(playerItem: item)
+            player.isMuted = false; player.volume = 1
             player.actionAtItemEnd = .pause
             self.player = player; duration = Clock.seconds(end)
+            stateObserver = player.observe(\.timeControlStatus, options: [.initial, .new]) { [weak self] _, _ in
+                Task { @MainActor [weak self] in guard let self, self.generation == operation else { return }; self.isPlaying = self.player?.timeControlStatus != .paused && self.player != nil }
+            }
             statusObserver = item.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
                 guard item.status == .failed else { return }
                 let message = item.error?.localizedDescription ?? "プレビューを再生できません。素材を確認してください。"
@@ -51,19 +57,22 @@ import SwiftUI
     }
     func seek(_ seconds: Double) {
         let time = min(max(0, seconds), max(0, duration - 0.001))
-        player?.pause()
+        pause()
         player?.seek(to: CMTime(seconds: time, preferredTimescale: Clock.scale), toleranceBefore: .zero, toleranceAfter: .zero)
         current = time
     }
     func play() {
+        do { try PlaybackAudio.activate(owner: generation) } catch { self.error = error.localizedDescription; return }
         if current >= duration - 0.05 { seek(0) }
-        player?.play()
+        player?.isMuted = false; player?.volume = 1; player?.play(); isPlaying = player != nil
     }
-    func pause() { player?.pause() }
+    func pause() { player?.pause(); isPlaying = false }
+    func toggle() { if isPlaying { pause() } else { play() } }
     func stop() {
+        pause()
+        PlaybackAudio.release(owner: generation)
         generation = UUID()
-        statusObserver = nil
-        player?.pause()
+        statusObserver = nil; stateObserver = nil
         if let observer { player?.removeTimeObserver(observer) }
         observer = nil; player?.replaceCurrentItem(with: nil); player = nil
         composition = nil; current = 0; duration = 0
@@ -86,7 +95,7 @@ struct TimelinePreview: View {
                     } else if let error = playback.error {
                         ContentUnavailableView("プレビューを開けません", systemImage: "exclamationmark.triangle", description: Text(error))
                     } else {
-                        VideoPlayer(player: playback.player).aspectRatio(16 / 9, contentMode: .fit).background(.black)
+                        EmbeddedMoviePlayer(player: playback.player).aspectRatio(16 / 9, contentMode: .fit).background(.black)
                             .clipShape(RoundedRectangle(cornerRadius: 12))
                         Text("\(Clock.text(Clock.ticks(playback.current), precise: true)) / \(Clock.text(Clock.ticks(playback.duration), precise: true))")
                             .font(.system(.subheadline, design: .monospaced)).frame(maxWidth: .infinity)
@@ -95,8 +104,7 @@ struct TimelinePreview: View {
                         HStack {
                             Button("10秒戻る", systemImage: "gobackward.10") { playback.seek(playback.current - 10) }.labelStyle(.iconOnly)
                             Spacer()
-                            Button("再生", systemImage: "play.fill") { playback.play() }
-                            Button("停止", systemImage: "pause.fill") { playback.pause() }
+                            Button(playback.isPlaying ? "一時停止" : "再生", systemImage: playback.isPlaying ? "pause.fill" : "play.fill") { playback.toggle() }.frame(minWidth: 100, minHeight: 44)
                             Spacer()
                             Button("10秒進む", systemImage: "goforward.10") { playback.seek(playback.current + 10) }.labelStyle(.iconOnly)
                         }.buttonStyle(.bordered).controlSize(.large)

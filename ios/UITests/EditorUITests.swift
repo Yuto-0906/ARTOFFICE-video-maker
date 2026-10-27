@@ -25,8 +25,11 @@ import XCTest
         let save = app.buttons["saveProject"]
         XCTAssertTrue(save.waitForExistence(timeout: 10))
         stage("save project"); save.tap()
-        let saved = expectation(for: NSPredicate(format: "label CONTAINS %@", "保存済み"), evaluatedWith: save)
+        XCTAssertTrue(app.staticTexts["保存しました"].waitForExistence(timeout: 5))
+        let saved = expectation(for: NSPredicate(format: "label CONTAINS %@", "自動保存済み"), evaluatedWith: app.staticTexts["saveStatus"])
         wait(for: [saved], timeout: 10)
+        XCTAssertTrue(app.buttons["importVideoFolder"].exists)
+        XCTAssertTrue(app.buttons["importVideoFiles"].exists)
         screenshot(app, name: "02-import")
         // iPadOS can present the tabs in its top toolbar rather than a TabBar.
         selectTab("編集", app: app)
