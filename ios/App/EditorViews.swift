@@ -70,10 +70,10 @@ struct EditorView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     HStack(spacing: 14) {
-                        Button("容量", systemImage: "internaldrive") { storage = true }.disabled(store.busy || store.exporting)
+                        Button("容量", systemImage: "internaldrive") { storage = true }.labelStyle(.titleAndIcon).disabled(store.busy || store.exporting)
                         VStack(spacing: 1) {
                             Button("保存", systemImage: "square.and.arrow.down") { Task { await store.saveNow() } }
-                                .disabled(store.busy).accessibilityIdentifier("saveProject")
+                                .labelStyle(.titleAndIcon).disabled(store.busy).accessibilityIdentifier("saveProject")
                             Text(store.saveStatus == "保存済み" ? "自動保存済み" : store.saveStatus).font(.caption2)
                                 .foregroundStyle(.secondary).accessibilityIdentifier("saveStatus")
                         }

@@ -6,6 +6,8 @@
 
 修正版の設定は1.1（ビルド2）。差分書式とCIスクリプトのシェル構文は確認したが，今回のSwift試験・iOSコンパイル・署名・導入は未実施である。Codemagicは再確認時点でも無料macOS枠501分／500分で，`Enable subscription`が表示されていた。課金設定は変更していない。iPadの導入版は引き続き`f3aa9a8`で，今回の変更やその前に追加した容量判定・電力制御は含まれない。
 
+UI改善のソースは`afdd525`でGitHubへ保存した。その後，ユーザー指定のスキルを再読込みし，無料枠のあるAzure Pipelinesも調べた。既存組織`yuto200596`・プロジェクト`ios-development`で，Microsoft-hostedの月1,800分が未消費であることを確認した。手動実行YAMLと既存署名処理への接続をソースに用意したが，GitHub接続の選択で自動承認レビューが権限範囲の承認不足を理由に拒否した。接続・実行は未完了である。詳細は[IOS_AZURE_PIPELINES.md](IOS_AZURE_PIPELINES.md)を参照する。
+
 ## 対象と完了条件
 
 実装の基準は[IOS_IMPLEMENTATION_PLAN.md](IOS_IMPLEMENTATION_PLAN.md)である。PC版との互換性は不要とし，端末内での編集保存，Codemagicでのビルド，iPhone 15と13インチM4 iPadの両方の最適化，合計5時間規模の動画処理を対象とする。

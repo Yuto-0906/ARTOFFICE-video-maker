@@ -57,7 +57,13 @@ if [[ "${1:-check}" == check ]]; then
     > ios/build/simulator-build.log 2>&1 || { grep -n -A 5 -B 2 -E 'error:|fatal error:|BUILD FAILED' ios/build/simulator-build.log || true; tail -n 35 ios/build/simulator-build.log; exit 1; }
   xcrun simctl list devices available --json > ios/build/simulators.json
   OVERALL_RESULT=0
-  for FAMILY in iPhone iPad; do
+  FAMILIES=(iPhone iPad)
+  case "${ARTOFFICE_TEST_FAMILY:-all}" in
+    all) ;;
+    iPhone|iPad) FAMILIES=("$ARTOFFICE_TEST_FAMILY") ;;
+    *) echo 'Unknown simulator family' >&2; exit 2 ;;
+  esac
+  for FAMILY in "${FAMILIES[@]}"; do
     echo "Running media and UI tests on $FAMILY"
     DEVICE_ID="$(python3 - "$FAMILY" <<'PY'
 import json, sys

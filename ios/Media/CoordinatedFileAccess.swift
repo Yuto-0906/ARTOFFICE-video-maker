@@ -2,7 +2,7 @@ import Foundation
 import UniformTypeIdentifiers
 
 enum CoordinatedFileAccess {
-    static func read<T>(_ url: URL, _ body: (URL) throws -> T) throws -> T {
+    static func read<T>(_ url: URL, _ body: @escaping (URL) throws -> T) throws -> T {
         var coordinationError: NSError?
         var result: Result<T, Error>?
         NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordinationError) { value in

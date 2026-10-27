@@ -1,0 +1,90 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: task
+    displayName: Verification or registered-device IPA
+    type: string
+    default: all
+    values: [all, media, storage, ui, device]
+
+# Microsoft's standard free macOS pool currently supplies this Intel image.
+# Keep the SDK choice explicit; physical iPad acceptance remains on iPadOS 27.0.1.
+pool:
+  vmImage: macOS-26
+variables:
+  DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+
+jobs:
+  - ${{ if ne(parameters.task, 'device') }}:
+      - job: Verify
+        displayName: Verify iOS app
+        timeoutInMinutes: 60
+        strategy:
+          maxParallel: 1
+          matrix:
+            iPhone:
+              deviceFamily: iPhone
+            iPad:
+              deviceFamily: iPad
+        steps:
+          - checkout: self
+            persistCredentials: false
+          - bash: bash scripts/ios/ci.sh check "$ARTOFFICE_CHECK_SELECTION"
+            displayName: Core, device build and selected simulator checks
+            env:
+              ARTOFFICE_CHECK_SELECTION: ${{ parameters.task }}
+              ARTOFFICE_TEST_FAMILY: $(deviceFamily)
+          - task: CopyFiles@2
+            condition: always()
+            inputs:
+              SourceFolder: ios/build
+              Contents: |
+                *.log
+                *.txt
+                *.xcresult/**
+                *-screenshots/**
+              TargetFolder: $(Build.ArtifactStagingDirectory)/checks
+          - task: PublishPipelineArtifact@1
+            condition: always()
+            inputs:
+              targetPath: $(Build.ArtifactStagingDirectory)/checks
+              artifact: checks-$(deviceFamily)
+  - ${{ if eq(parameters.task, 'device') }}:
+      - job: SignedDevice
+        displayName: Registered-device IPA
+        timeoutInMinutes: 60
+        variables:
+          - group: artoffice-ios-signing
+        steps:
+          - checkout: self
+            persistCredentials: false
+          - task: DownloadSecureFile@1
+            name: certificate
+            inputs:
+              secureFile: artoffice-development.p12
+          - task: DownloadSecureFile@1
+            name: profile
+            inputs:
+              secureFile: artoffice-app-development.mobileprovision
+          - bash: python3 scripts/ios/azure-sign.py
+            displayName: Verify profile and sign with the existing development identity
+            env:
+              ARTOFFICE_P12_FILE: $(certificate.secureFilePath)
+              ARTOFFICE_PROFILE_FILE: $(profile.secureFilePath)
+              ARTOFFICE_DEVELOPMENT_P12_PASSWORD: $(ARTOFFICE_DEVELOPMENT_P12_PASSWORD)
+          - task: CopyFiles@2
+            condition: always()
+            inputs:
+              SourceFolder: ios/build
+              Contents: |
+                *.ipa
+                *.log
+                *.txt
+                signing-report.json
+              TargetFolder: $(Build.ArtifactStagingDirectory)/ios
+          - task: PublishPipelineArtifact@1
+            condition: always()
+            inputs:
+              targetPath: $(Build.ArtifactStagingDirectory)/ios
+              artifact: ios-signed
