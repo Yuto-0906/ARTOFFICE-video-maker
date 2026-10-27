@@ -26,6 +26,12 @@ def inspect_ipa(path: Path, expected_bundle: str) -> dict:
         platforms = info.get('CFBundleSupportedPlatforms', [])
         if not isinstance(platforms, list) or 'iPhoneOS' not in platforms:
             raise ValueError('Expected an iPhoneOS device app, not a simulator or other platform')
+        for icons_key in ('CFBundleIcons', 'CFBundleIcons~ipad'):
+            if info.get(icons_key, {}).get('CFBundlePrimaryIcon', {}).get('CFBundleIconName') != 'AppIcon':
+                raise ValueError('Missing iPhone or iPad AppIcon metadata')
+        for resource in ('Assets.car', 'PrivacyInfo.xcprivacy'):
+            if root + resource not in entries or archive.getinfo(root + resource).file_size == 0:
+                raise ValueError('Missing required app resource: ' + resource)
 
         def check_component(component_root: str, profile_name: str) -> None:
             component_info = plistlib.loads(archive.read(component_root + 'Info.plist'))
@@ -67,6 +73,8 @@ def inspect_ipa(path: Path, expected_bundle: str) -> dict:
         'driverExtensions': extension_counts['dext'],
         'sha256': digest,
         'structureVerified': True,
+        'appIconVerified': True,
+        'assetCatalogVerified': True,
         'cryptographicSignatureVerification': 'Use macOS codesign and on-device validation',
     }
 

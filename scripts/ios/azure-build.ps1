@@ -63,7 +63,8 @@ try {
             $artifact = @($artifacts.value | Where-Object { $_.name -eq 'ios-signed' })
             if ($artifact.Count -ne 1) { throw 'Expected exactly one ios-signed artifact.' }
             $downloadUri = [Uri]$artifact[0].resource.downloadUrl
-            if ($downloadUri.Scheme -ne 'https' -or $downloadUri.Host -ne 'dev.azure.com') { throw 'Expected the authenticated Azure DevOps artifact endpoint.' }
+            $artifactHosts = @('dev.azure.com', 'artprodsea1.artifacts.visualstudio.com')
+            if ($downloadUri.Scheme -ne 'https' -or $downloadUri.Host -notin $artifactHosts) { throw 'Expected the authenticated Azure DevOps artifact endpoint.' }
             $destination = Join-Path $repositoryRoot ".cache/ios-signed/azure-build-$BuildId"
             New-Item -ItemType Directory -Path $destination -Force | Out-Null
             $zip = Join-Path $destination 'ios-signed.zip'

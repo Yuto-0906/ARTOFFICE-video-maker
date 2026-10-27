@@ -10,14 +10,13 @@ settings:
     TARGETED_DEVICE_FAMILY: '1,2'
     IPHONEOS_DEPLOYMENT_TARGET: '17.0'
     MARKETING_VERSION: '1.1'
-    CURRENT_PROJECT_VERSION: '4'
+    CURRENT_PROJECT_VERSION: '5'
     CODE_SIGN_STYLE: Automatic
 targets:
   ARTOFFICE:
     type: application
     platform: iOS
-    sources: [App, Core, Media, Rendering]
-    resources: [Resources]
+    sources: [App, Core, Media, Rendering, Resources]
     info:
       path: Info.plist
       properties:

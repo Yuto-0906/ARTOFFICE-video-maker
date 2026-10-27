@@ -97,6 +97,12 @@ def main() -> None:
             info = plistlib.loads((app / "Info.plist").read_bytes())
             if info["CFBundleIdentifier"] != BUNDLE or info["CFBundleSupportedPlatforms"] != ["iPhoneOS"]:
                 raise SystemExit("Built app is not the expected physical-device application")
+            for icons_key in ("CFBundleIcons", "CFBundleIcons~ipad"):
+                if info.get(icons_key, {}).get("CFBundlePrimaryIcon", {}).get("CFBundleIconName") != "AppIcon":
+                    raise SystemExit("The built app is missing its iPhone or iPad icon")
+            for resource in ("Assets.car", "PrivacyInfo.xcprivacy"):
+                if not (app / resource).is_file() or (app / resource).stat().st_size == 0:
+                    raise SystemExit("The built app is missing a required resource: " + resource)
             embedded = plistlib.loads(run(["security", "cms", "-D", "-i", str(app / "embedded.mobileprovision")]))
             if embedded["UUID"] != profile["UUID"]:
                 raise SystemExit("Embedded profile mismatch")
@@ -108,9 +114,10 @@ def main() -> None:
             run(["ditto", str(app), str(payload / app.name)])
             ipa = BUILD / "ARTOFFICE-ios-development.ipa"
             run(["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", str(payload), str(ipa)])
-            report = {"bundleId": BUNDLE, "version": info["CFBundleShortVersionString"], "platform": "iPhoneOS",
+            report = {"bundleId": BUNDLE, "version": info["CFBundleShortVersionString"], "build": info["CFBundleVersion"], "platform": "iPhoneOS",
                       "profileExpires": expires.isoformat(), "certificateExpires": certificate_expires,
                       "registeredDeviceCount": len(profile["ProvisionedDevices"]), "codesignVerified": True,
+                      "appIconVerified": True, "assetCatalogVerified": True,
                       "revision": run(["git", "rev-parse", "HEAD"]).decode().strip()}
             (BUILD / "signing-report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
             print("Development IPA created and its signature verified")
