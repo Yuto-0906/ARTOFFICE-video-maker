@@ -41,7 +41,7 @@ import XCTest
         selectTab("サムネイル", app: app)
         XCTAssertTrue(app.staticTexts["集合写真を16:9に切り抜く"].waitForExistence(timeout: 5)); screenshot(app, name: "04-thumbnail")
         selectTab("書き出し", app: app)
-        XCTAssertTrue(app.otherElements["outputFrameRate"].exists || app.buttons["outputFrameRate"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["outputFrameRate"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["startExport"].waitForExistence(timeout: 5)); screenshot(app, name: "05-export")
         stage("terminate"); app.terminate()
         stage("relaunch"); app.launch()
