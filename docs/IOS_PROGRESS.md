@@ -1,5 +1,11 @@
 # iOS版の実装・検証記録
 
+## 2026年10月28日：保存表示・fps・アイコン・ピンク配色
+
+実機の指摘を受け，保存状態をツールバー外へ移し，画面内の説明を短縮した。素材一覧へfpsを表示し，新規プロジェクトの出力fpsを自動選択にした。手動選択と旧プロジェクトの保存値を保持する。追加のCore4件と，既存の出力形式試験による自動60fps・各手動値の検証を用意した。提供されたロゴを基にしたアイコンと，ライト・ダーク別のピンク配色も組み込んだ。最終候補は`e8b5573`・1.1（ビルド4）で，まだiPadへ更新していない。
+
+ビルド2のUI専用Run 5は追加修正を含む版へ切り替えるため中止した。その後，アイコン・配色を追加する前の`8978360`で起動したAzure Run 6は失敗した。GitHub Checksの注釈では終了コード1だけが得られ，原因は未確定である。ユーザーからChrome操作を最小限にする再指示を受けたため，ブラウザー操作を止め，プロジェクト内にAzure CLIを準備している。状態確認は引き続きGitHub Checks APIを使う。Azure API用の認証はまだないため，詳細ログ取得・最新版の起動はその準備後に行う。未確定の試験を成功とは扱わない。
+
 ## 2026年10月28日：UI修正版をM4 iPadへ更新
 
 [Azure Run 4](https://dev.azure.com/yuto200596/ios-development/_build/results?buildId=4)で`fe8dfd3f567d4cb40ae366e022797090c4ddbf4a`のRelease署名ビルドが4分23秒で成功した。macOS上の`codesignVerified: true`とリビジョンを照合し，WindowsでもIPA構成検査，承認済みプロファイルとの一致，対象iPadの包含を確認した。IPAは`.cache/ios-signed/azure-build-4/ios-signed/ARTOFFICE-ios-development.ipa`，SHA-256は`ff8af5fffb1d991436104056e796b8506b2a507289f8f1625a9dd7a69567f1ae`である。
