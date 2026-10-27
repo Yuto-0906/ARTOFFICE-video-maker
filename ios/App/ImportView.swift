@@ -103,7 +103,7 @@ struct ImportView: View {
         }
         .sheet(item: $inspection) { clip in
             NavigationStack {
-                ClipEditor(id: clip.id).navigationTitle("動画を確認・整理").navigationBarTitleDisplayMode(.inline)
+                ClipEditor(id: clip.id, organizing: true).navigationTitle("動画を確認・整理").navigationBarTitleDisplayMode(.inline)
                     .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完了") { Task { do { try await store.flush(); inspection = nil } catch { store.message = error.localizedDescription } } } } }
             }
         }

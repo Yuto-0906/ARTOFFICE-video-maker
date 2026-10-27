@@ -119,7 +119,9 @@ struct TrimView: View {
 struct ClipEditor: View {
     @EnvironmentObject private var store: AppStore
     let id: UUID
+    var organizing = false
     @StateObject private var playback = PlaybackModel()
+    @State private var namingExpanded = false
     @State private var startText = ""
     @State private var endText = ""
     @Environment(\.scenePhase) private var scenePhase
@@ -145,12 +147,14 @@ struct ClipEditor: View {
                         Spacer()
                         Button("1フレーム進む", systemImage: "forward.end") { playback.step(1) }.labelStyle(.iconOnly)
                     }.buttonStyle(.bordered).controlSize(.large)
-                    GroupBox("名前と並び順") {
+                    DisclosureGroup("名前と並び順", isExpanded: $namingExpanded) {
                         VStack(alignment: .leading, spacing: 12) {
+                            Text("一覧で使う動画名").font(.caption).foregroundStyle(.secondary)
                             TextField("動画の表示名", text: Binding(get: { store.project.clips[i].displayName ?? (clip.source.fileName as NSString).deletingPathExtension }, set: { store.project.clips[i].displayName = $0 }))
                                 .textFieldStyle(.roundedBorder).accessibilityIdentifier("clipDisplayName")
                             Text("元のファイル：\(clip.source.fileName)").font(.caption).foregroundStyle(.secondary)
                             if !clip.joinPrevious {
+                                Text("映像に表示するバンド名").font(.caption).foregroundStyle(.secondary)
                                 TextField("動画に表示するバンド名", text: $store.project.clips[i].bandName).textFieldStyle(.roundedBorder)
                                     .accessibilityIdentifier("clipBandName")
                                 Button("表示名をバンド名にも使う") {
@@ -167,7 +171,7 @@ struct ClipEditor: View {
                             }
                             Text("表示名とバンド名はこのプロジェクト内の名前です。元の動画やクラウド上のファイル名は変更しません。").font(.caption).foregroundStyle(.secondary)
                         }.frame(maxWidth: .infinity, alignment: .leading)
-                    }
+                    }.frame(minHeight: 44).onAppear { namingExpanded = organizing }
                     GroupBox("開始位置") {
                         VStack {
                             Slider(value: Binding(get: { Clock.seconds(clip.start) }, set: { store.project.clips[i].trimStart(Clock.ticks($0)); playback.seek(Clock.seconds(store.project.clips[i].start)) }), in: 0...max(0.01, Clock.seconds(clip.source.duration)))

@@ -65,7 +65,7 @@ struct ThumbnailView: View {
                     HStack {
                         Text("拡大 \(Int(crop.zoom * 100))%").font(.headline.monospacedDigit())
                         Spacer()
-                        Button("全体に戻す", systemImage: "arrow.counterclockwise") {
+                        Button("位置と拡大をリセット", systemImage: "arrow.counterclockwise") {
                             var reset = crop; reset.zoom = 1; reset.centerX = 0.5; reset.centerY = 0.5
                             store.project.thumbnail = reset
                         }.frame(minHeight: 44)
