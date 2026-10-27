@@ -151,8 +151,9 @@ enum ExportEngine {
         report.reusedChunkIndices = reused.sorted()
         // Validated hard links already occupy storage；budget only the missing chunks
         // and the new final file，including when editing changes the job identity.
-        let sameVolume = (try? job.resourceValues(forKeys: [.volumeIdentifierKey]).volumeIdentifier as? NSObject)
-            == (try? outputDirectory.resourceValues(forKeys: [.volumeIdentifierKey]).volumeIdentifier as? NSObject)
+        let localVolume = try? job.resourceValues(forKeys: [.volumeIdentifierKey]).volumeIdentifier as? NSObject
+        let destinationVolume = try? outputDirectory.resourceValues(forKeys: [.volumeIdentifierKey]).volumeIdentifier as? NSObject
+        let sameVolume = StorageVolumeIdentity.matches(localVolume, destinationVolume)
         if destination != nil && sameVolume {
             try MediaFiles.requireSpace(max(1_000_000_000, capacity.localWorking + capacity.destinationWorking - used - 1_000_000_000), at: job)
         } else {
