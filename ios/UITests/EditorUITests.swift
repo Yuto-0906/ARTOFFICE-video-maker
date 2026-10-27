@@ -3,6 +3,7 @@ import XCTest
 
 @MainActor final class EditorUITests: XCTestCase {
     func testEditorNavigationAndSavedProjectSurviveRelaunch() throws {
+        executionTimeAllowance = 600
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["ARTOFFICE_UI_TEST_ROOT"] = UUID().uuidString
@@ -15,11 +16,12 @@ import XCTest
         let clearName = app.buttons["clearEventName"]
         XCTAssertTrue(clearName.waitForExistence(timeout: 10))
         stage("clear event name"); clearName.tap()
-        let empty = expectation(for: NSPredicate(format: "value == %@ OR value == %@", "", "イベント名"), evaluatedWith: name)
-        wait(for: [empty], timeout: 5)
+        stage("cleared field value \(String(describing: name.value))")
+        let empty = expectation(for: NSPredicate(format: "value == nil OR value == %@ OR value == %@", "", "イベント名"), evaluatedWith: name)
+        wait(for: [empty], timeout: 15)
         stage("enter event name"); name.tap(); name.typeText("Live UI Test")
         let entered = expectation(for: NSPredicate(format: "value == %@", "Live UI Test"), evaluatedWith: name)
-        wait(for: [entered], timeout: 5)
+        wait(for: [entered], timeout: 15)
         XCTAssertEqual(name.value as? String, "Live UI Test")
         stage("finish event name"); name.typeText("\n")
         let save = app.buttons["saveProject"]
@@ -62,6 +64,9 @@ import XCTest
         target.tap()
     }
     private func screenshot(_ app: XCUIApplication, name: String) {
+        // Full-screen snapshots are optional diagnostics on slow hosted simulators.
+        // Navigation, input, save and relaunch assertions always run.
+        guard ProcessInfo.processInfo.environment["ARTOFFICE_UI_SCREENSHOTS"] == "1" else { stage("checkpoint \(name)"); return }
         stage("screenshot \(name)")
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)

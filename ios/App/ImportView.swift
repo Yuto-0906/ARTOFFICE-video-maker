@@ -47,7 +47,7 @@ struct ImportView: View {
                     TextField("イベント名", text: $store.project.name).accessibilityIdentifier("eventName")
                         .autocorrectionDisabled().focused($eventNameFocused).submitLabel(.done).onSubmit { eventNameFocused = false }
                     if !store.project.name.isEmpty {
-                        Button("イベント名を消去", systemImage: "xmark.circle.fill") { store.project.name = ""; eventNameFocused = true }
+                        Button("イベント名を消去", systemImage: "xmark.circle.fill") { store.project.name = "" }
                             .labelStyle(.iconOnly).frame(width: 44, height: 44).accessibilityIdentifier("clearEventName")
                     }
                 }
