@@ -2,6 +2,8 @@
 
 この手順は，Codemagicの署名ビルドが成功してIPAを取得できた後に使う。現時点の実行結果は[IOS_PROGRESS.md](IOS_PROGRESS.md)へ記録する。導入後の操作確認は[IOS_DEVICE_ACCEPTANCE.md](IOS_DEVICE_ACCEPTANCE.md)に沿って行う。
 
+2026年10月27日，M4 iPad（27.0.1）で新規導入と上書き更新が成功した。現在導入しているのは[署名ビルド #2](https://codemagic.io/app/6adb7fa259debc2d2f15db9f/build/6ae007e94a72334e32e58ec5)，ソース`f3aa9a8`，IPAは`.cache/ios-signed/build-2/ARTOFFICE-ios-development.ipa`である。Core14件・macOSでの署名検証・Windowsでの構成検査が通り，端末の`ProfileValidated: true`と，更新前後の編集JSONの一致を確認した。iPhoneの導入はユーザー指示により後日対応とする。
+
 ## ビルドとIPAを対応させる
 
 Codemagicの`ios-device`で成功したビルドを開き，コミット，`ARTOFFICE-ios-development.ipa`，`signing-report.json`を確認する。署名レポートの`codesignVerified`，Bundle ID，バージョン，リビジョンを照合して，同じビルドのIPAを取得する。ダウンロード先はGit除外済みの`.cache/ios-delivery/`などを使う。
