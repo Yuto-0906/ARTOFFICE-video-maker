@@ -2,6 +2,10 @@
 
 更新日：2026年10月28日。
 
+28日追記：Chromeの利用を最小限にするユーザー指示を受け，ブラウザー操作を停止した。プロジェクト内の`.cache/azure-cli/`へ公式Azure CLI 2.91.0を用意し，`az rest`でAzure DevOpsを直接操作する経路へ移行中である。認証キャッシュもGit除外済みの`.cache/azure-config/`へ分離する。初回の本人認証を依頼しており，この時点ではAPIログイン済みとは扱わない。`az rest --resource 499b84ac-1321-427f-aa17-267ca6975798`で認証ヘッダーをCLIに任せ，値を会話・引数・通常ログへ出さない。通常のCI状態確認は既存GitHub Checks APIで継続する。
+
+Run 5は新しい実機指摘を含む版へ切り替えるため中止した。続く`8978360`のRun 6は失敗し，GitHubの注釈で終了コード1を確認したが，詳細原因はまだ取得できていない。アイコンとピンク配色まで含む最新版は`e8b5573`・1.1（ビルド4）で，未ビルド・未導入である。以下の実行中・CLI未導入の記述は，この追記前の記録として読む。
+
 `windows-ios-development`スキルの再読込みを受け，無料枠のあるAzure Pipelinesを追加の検証先として準備した。ソースはGitHubの`Yuto-0906/ARTOFFICE-video-maker`・`codex/ios-native`を継続使用する。既存のCodemagic設定は残す。GitHub Actionsや有料ランナーを起動する変更ではない。
 
 ## 利用枠・接続・署名
