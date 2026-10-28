@@ -77,10 +77,11 @@ struct ExportReport: Codable {
 }
 
 enum ExportEngine {
-    static let rendererVersion = 5
+    static let rendererVersion = 6
     // All four output frame rates have integral frame durations at 60 kHz.
     // Five-hour movie durations also fit a 32-bit duration field at this scale.
-    private static let outputVideoScale: CMTimeScale = 60_000
+    // 1001/24000 and all other supported frame durations are exact at 120 kHz.
+    private static let outputVideoScale: CMTimeScale = 120_000
     static func key(_ project: Project) throws -> String {
         struct Identity: Encodable { let version: Int; let clips: [Clip]; let resolution: Resolution; let frameRate: FrameRate }
         let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
