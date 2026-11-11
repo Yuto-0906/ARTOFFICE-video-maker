@@ -24,11 +24,10 @@ export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
 
     return (
       <main className="fatal-error" role="alert">
-        <p className="eyebrow">予期しないエラー</p>
-        <h1>画面の表示中に問題が発生しました。</h1>
-        <p>プロジェクトを保存していない場合は，この画面を閉じずに次の内容を控えてください。</p>
+        <h1>エラーが起きました</h1>
+        <p className="muted">再読み込みすると，保存していない変更は失われます。不具合を報告するときは下の内容を添えてください。</p>
         <pre>{this.state.error.stack || this.state.error.message}</pre>
-        <button className="primary" onClick={() => window.location.reload()}>アプリを再読み込み</button>
+        <button className="primary" onClick={() => window.location.reload()}>再読み込み</button>
       </main>
     );
   }

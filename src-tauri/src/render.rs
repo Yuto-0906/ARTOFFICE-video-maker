@@ -72,7 +72,10 @@ impl Drop for RenderArtifactsGuard {
     }
 }
 
-struct SleepGuard;
+struct SleepGuard {
+    #[cfg(target_os = "macos")]
+    child: Option<std::process::Child>,
+}
 
 impl SleepGuard {
     fn acquire() -> Self {
@@ -83,12 +86,26 @@ impl SleepGuard {
             };
             SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED);
         }
-        Self
+        Self {
+            #[cfg(target_os = "macos")]
+            child: std::process::Command::new("/usr/bin/caffeinate")
+                .args(["-i", "-w", &std::process::id().to_string()])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .ok(),
+        }
     }
 }
 
 impl Drop for SleepGuard {
     fn drop(&mut self) {
+        #[cfg(target_os = "macos")]
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
         #[cfg(windows)]
         unsafe {
             use windows_sys::Win32::System::Power::{SetThreadExecutionState, ES_CONTINUOUS};
@@ -156,10 +173,12 @@ pub fn output_paths_for(request: &RenderRequest) -> Result<OutputPaths> {
     let stem = safe_stem(&request.event_name);
     let video = directory.join(format!("{stem}.mp4"));
     let chapters = directory.join(format!("{stem}_チャプター.txt"));
-    let thumbnail = request
-        .thumbnail
-        .as_ref()
-        .map(|_| directory.join(format!("{stem}_サムネイル.jpg")));
+    let thumbnail = request.thumbnail.as_ref().map(|thumbnail| {
+        directory.join(format!(
+            "{stem}_サムネイル.{}",
+            thumbnail.output_format.extension()
+        ))
+    });
     let mut existing = Vec::new();
     for path in [&video, &chapters] {
         if path.exists() {
@@ -235,14 +254,31 @@ fn validate_request(request: &RenderRequest) -> Result<OutputPaths> {
             clip.band_name
         );
     }
+    let (width, height) = request.dimensions();
+    anyhow::ensure!(
+        width > 0
+            && height > 0
+            && width <= 8192
+            && height <= 8192
+            && width % 2 == 0
+            && height % 2 == 0,
+        "出力の幅と高さには8192以下の正の偶数が必要です。"
+    );
+    let fps = request.fps();
+    anyhow::ensure!(
+        fps.numerator > 0
+            && fps.denominator > 0
+            && fps.value() <= 480.0
+            && fps.numerator <= i32::MAX as u64,
+        "出力フレームレートが不正です。"
+    );
     let paths = output_paths_for(request)?;
     anyhow::ensure!(
         request.overwrite || paths.existing.is_empty(),
         "出力先に同名ファイルがあります。"
     );
     let estimated =
-        ((request.resolution.bitrate() + 384_000) as f64 * total_duration(&request.clips) / 8.0
-            * 1.1) as u64;
+        ((request.bitrate() + 384_000) as f64 * total_duration(&request.clips) / 8.0 * 1.1) as u64;
     let free = fs2::available_space(&request.output_directory)
         .context("保存先の空き容量を確認できませんでした。")?;
     anyhow::ensure!(
@@ -261,7 +297,7 @@ fn partial_path(path: &Path) -> PathBuf {
 
 fn working_directory(job_id: &str) -> Result<PathBuf> {
     let directory = dirs::cache_dir()
-        .context("Windowsのキャッシュフォルダーが見つかりません。")?
+        .context("キャッシュフォルダーが見つかりません。")?
         .join("ARTOFFICE-video-maker")
         .join(format!("render-{job_id}"));
     fs::create_dir_all(&directory).context("書き出し用キャッシュを作成できませんでした。")?;
@@ -307,6 +343,26 @@ fn build_filter_graph_internal(
     working: &Path,
     show_first_title: bool,
 ) -> Result<PathBuf> {
+    build_filter_graph_with_rate(
+        clips,
+        resolution,
+        dimensions,
+        font_path,
+        working,
+        show_first_title,
+        OUTPUT_FPS,
+    )
+}
+
+fn build_filter_graph_with_rate(
+    clips: &[ClipV1],
+    resolution: Resolution,
+    dimensions: (u32, u32),
+    font_path: &Path,
+    working: &Path,
+    show_first_title: bool,
+    fps: &str,
+) -> Result<PathBuf> {
     let (width, height) = dimensions;
     let working_font = working.join(FILTER_FONT_FILE);
     fs::copy(font_path, &working_font).context("書き出し用フォントを準備できませんでした。")?;
@@ -319,7 +375,7 @@ fn build_filter_graph_internal(
     let mut graph = String::new();
     for (index, clip) in clips.iter().enumerate() {
         graph.push_str(&format!(
-            "[{index}:v]trim=start={:.9}:end={:.9},setpts=PTS-STARTPTS,yadif=deint=interlaced,fps={OUTPUT_FPS},scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,format=yuv420p,settb=AVTB",
+            "[{index}:v]trim=start={:.9}:end={:.9},setpts=PTS-STARTPTS,yadif=deint=interlaced,fps={fps},scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,format=yuv420p,settb=AVTB",
             clip.start_seconds(),
             clip.end_seconds(),
         ));
@@ -392,7 +448,18 @@ fn encoder_args(
     resolution: Resolution,
     bitrate_override: Option<u64>,
 ) -> Vec<OsString> {
-    let bitrate = bitrate_override.unwrap_or_else(|| resolution.bitrate());
+    encoder_args_with_rate(
+        config,
+        bitrate_override.unwrap_or_else(|| resolution.bitrate()),
+        crate::models::FrameRate::default().resolve(None),
+    )
+}
+
+fn encoder_args_with_rate(
+    config: &EncoderConfig,
+    bitrate: u64,
+    fps: crate::models::Rational,
+) -> Vec<OsString> {
     let maxrate = bitrate * 7 / 5;
     let bufsize = bitrate * 2;
     let mut args = Vec::<OsString>::new();
@@ -423,6 +490,22 @@ fn encoder_args(
             push!("medium");
             push!("-sc_threshold");
             push!("0");
+        }
+        "h264_videotoolbox" => {
+            push!("-allow_sw");
+            push!("0");
+            push!("-fps_mode:v");
+            push!("cfr");
+            // VideoToolbox can omit packet durations, leaving MP4's final frame
+            // one track tick long. Keep every packet at the fixed output duration
+            // without changing PTS/DTS or the ordering of B-frames.
+            push!("-bsf:v");
+            push!(format!(
+                "setts=time_base=1/{}:prescale=1:pts=PTS:dts=DTS:duration={}",
+                fps.numerator, fps.denominator
+            ));
+            push!("-video_track_timescale");
+            push!(fps.numerator.to_string());
         }
         _ => {}
     }
@@ -474,6 +557,18 @@ async fn encoder_available(ffmpeg: &Path, config: &EncoderConfig) -> bool {
 }
 
 async fn choose_encoder(ffmpeg: &Path, cancellation: &CancellationToken) -> Result<EncoderConfig> {
+    #[cfg(target_os = "macos")]
+    let candidates = [
+        EncoderConfig {
+            codec: "h264_videotoolbox",
+            label: "Apple VideoToolbox",
+        },
+        EncoderConfig {
+            codec: "libx264",
+            label: "CPU（libx264）",
+        },
+    ];
+    #[cfg(not(target_os = "macos"))]
     let candidates = [
         EncoderConfig {
             codec: "h264_nvenc",
@@ -529,12 +624,14 @@ fn chapter_text(clips: &[ClipV1]) -> String {
     format!("{}\r\n", rows.join("\r\n"))
 }
 
-fn emit_progress(app: &AppHandle, payload: RenderProgress) {
-    let _ = app.emit("render-progress", payload);
+fn emit_progress(app: Option<&AppHandle>, payload: RenderProgress) {
+    if let Some(app) = app {
+        let _ = app.emit("render-progress", payload);
+    }
 }
 
 struct FfmpegExecution<'a> {
-    app: &'a AppHandle,
+    app: Option<&'a AppHandle>,
     job_id: &'a str,
     request: &'a RenderRequest,
     encoder: &'a EncoderConfig,
@@ -579,9 +676,17 @@ async fn execute_ffmpeg(execution: FfmpegExecution<'_>) -> Result<bool> {
         .arg("[aout]")
         .arg("-c:v")
         .arg(encoder.codec)
-        .args(encoder_args(encoder, request.resolution, None))
+        .args(encoder_args_with_rate(
+            encoder,
+            request.bitrate(),
+            request.fps(),
+        ))
         .arg("-r")
-        .arg(OUTPUT_FPS)
+        .arg(format!(
+            "{}/{}",
+            request.fps().numerator,
+            request.fps().denominator
+        ))
         .arg("-pix_fmt")
         .arg("yuv420p")
         .arg("-color_primaries")
@@ -767,7 +872,7 @@ fn commit_outputs(outputs: &[(&Path, &Path)], job_id: &str) -> Result<()> {
 }
 
 async fn run_job(
-    app: AppHandle,
+    app: Option<AppHandle>,
     job_id: String,
     request: RenderRequest,
     cancellation: CancellationToken,
@@ -799,7 +904,7 @@ async fn run_job(
     }
 
     emit_progress(
-        &app,
+        app.as_ref(),
         RenderProgress {
             job_id: job_id.clone(),
             phase: "preparing".to_string(),
@@ -827,7 +932,7 @@ async fn run_job(
         .context("チャプターテキストを作成できませんでした。")?;
     if let (Some(model), Some(destination)) = (&request.thumbnail, &partial_thumbnail) {
         emit_progress(
-            &app,
+            app.as_ref(),
             RenderProgress {
                 job_id: job_id.clone(),
                 phase: "preparing".to_string(),
@@ -846,15 +951,18 @@ async fn run_job(
         });
     }
 
-    let graph = build_filter_graph(
+    let fps = request.fps();
+    let graph = build_filter_graph_with_rate(
         &request.clips,
         request.resolution,
-        request.resolution.dimensions(),
+        request.dimensions(),
         &font,
         &working,
+        true,
+        &format!("{}/{}", fps.numerator, fps.denominator),
     )?;
-    let completed = execute_ffmpeg(FfmpegExecution {
-        app: &app,
+    let execution_result = execute_ffmpeg(FfmpegExecution {
+        app: app.as_ref(),
         job_id: &job_id,
         request: &request,
         encoder: &encoder,
@@ -863,7 +971,65 @@ async fn run_job(
         output: &partial_video,
         cancellation: &cancellation,
     })
-    .await?;
+    .await;
+    #[cfg(target_os = "macos")]
+    let (completed, encoder) = if encoder.codec == "h264_videotoolbox" {
+        let valid_output = if matches!(execution_result, Ok(true)) {
+            let probe =
+                crate::media::probe_paths(vec![partial_video.to_string_lossy().into_owned()])
+                    .await
+                    .remove(0);
+            probe.media.is_some_and(|media| {
+                media.video_codec == "h264"
+                    && (media.width, media.height) == request.dimensions()
+                    && (media.fps.value() - request.fps().value()).abs() < 0.001
+            })
+        } else {
+            false
+        };
+        if cancellation.is_cancelled() || matches!(execution_result, Ok(false)) {
+            (false, encoder)
+        } else if valid_output {
+            (true, encoder)
+        } else {
+            // A successful small encoder probe does not guarantee that the full
+            // resolution export works. Discard an invalid hardware result before
+            // retrying the complete job with the bundled CPU encoder.
+            let encoder = EncoderConfig {
+                codec: "libx264",
+                label: "CPU（libx264）",
+            };
+            emit_progress(
+                app.as_ref(),
+                RenderProgress {
+                    job_id: job_id.clone(),
+                    phase: "preparing".into(),
+                    progress: 0.0,
+                    elapsed_seconds: 0.0,
+                    eta_seconds: None,
+                    encoder: Some(encoder.label.into()),
+                    message: "VideoToolboxを利用できないため，CPUで書き出します。".into(),
+                },
+            );
+            let _ = fs::remove_file(&partial_video);
+            let completed = execute_ffmpeg(FfmpegExecution {
+                app: app.as_ref(),
+                job_id: &job_id,
+                request: &request,
+                encoder: &encoder,
+                ffmpeg: &ffmpeg,
+                graph: &graph,
+                output: &partial_video,
+                cancellation: &cancellation,
+            })
+            .await?;
+            (completed, encoder)
+        }
+    } else {
+        (execution_result?, encoder)
+    };
+    #[cfg(not(target_os = "macos"))]
+    let completed = execution_result?;
     if !completed {
         return Ok(RunOutcome::Cancelled {
             encoder: Some(encoder.label.to_string()),
@@ -900,7 +1066,7 @@ pub async fn start(
     let result_id = job_id.clone();
     let state_for_task = state.clone();
     tauri::async_runtime::spawn(async move {
-        let result = run_job(app.clone(), result_id.clone(), request, cancellation).await;
+        let result = run_job(Some(app.clone()), result_id.clone(), request, cancellation).await;
         let payload = match result {
             Ok(RunOutcome::Completed { encoder, paths }) => RenderFinished {
                 job_id: result_id.clone(),
@@ -944,6 +1110,239 @@ pub fn cleanup_cache() {
     }
 }
 
+/// Exercise the actual job, cancellation and output transaction code in a packaged app.
+pub(crate) async fn verify_packaged_runtime(directory: &Path) -> Result<()> {
+    use crate::{
+        media,
+        models::{CropRectNormalized, ThumbnailV1},
+    };
+    use image::{Rgb, RgbImage};
+
+    fs::create_dir_all(directory)?;
+    let directory = fs::canonicalize(directory)?;
+    let ffmpeg = tools::ffmpeg().context("Bundled FFmpeg is required")?;
+    let ffprobe = tools::ffprobe().context("Bundled ffprobe is required")?;
+    let font = tools::font().context("Bundled Noto Sans JP Black is required")?;
+    let mut sources = Vec::new();
+    for (index, color) in ["red", "green", "blue"].into_iter().enumerate() {
+        let source = directory.join(format!("{}_日本語 バンド.mp4", index + 1));
+        let output = Command::new(&ffmpeg)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+            ])
+            .arg(format!("color=c={color}:s=640x360:r={OUTPUT_FPS}:d=2"))
+            .args([
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=48000:duration=2",
+                "-shortest",
+                "-c:v",
+                "mpeg4",
+                "-q:v",
+                "5",
+                "-c:a",
+                "aac",
+                "-ac",
+                "2",
+            ])
+            .arg(&source)
+            .output()
+            .await?;
+        anyhow::ensure!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        sources.push(source.to_string_lossy().into_owned());
+    }
+    let mut clips = Vec::new();
+    for (index, probe) in media::probe_paths(sources).await.into_iter().enumerate() {
+        anyhow::ensure!(
+            probe.error.is_none(),
+            "Media probe failed: {:?}",
+            probe.error
+        );
+        clips.push(ClipV1 {
+            id: Uuid::new_v4().to_string(),
+            source_path: probe.path,
+            source_file_name: probe.file_name,
+            fingerprint: probe.fingerprint,
+            order: (index + 1) as u32,
+            band_name: if index < 2 {
+                "日本語バンド"
+            } else {
+                "次のバンド"
+            }
+            .to_string(),
+            in_frame: 15,
+            out_frame_exclusive: 75,
+            media: probe.media.context("Missing media metadata")?,
+            join_with_previous: index == 1,
+            import_error: None,
+        });
+    }
+    let source_image = directory.join("集合 写真.png");
+    RgbImage::from_pixel(960, 540, Rgb([230, 30, 40])).save(&source_image)?;
+    let prepared = thumbnail::prepare(&source_image.to_string_lossy()).await?;
+    let thumbnail = ThumbnailV1 {
+        source_path: prepared.source_path,
+        preview_path: prepared.preview_path,
+        source_width: prepared.source_width,
+        source_height: prepared.source_height,
+        exif_orientation: 1,
+        output_format: Default::default(),
+        zoom: 1.0,
+        crop: CropRectNormalized {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        },
+    };
+    let mut encoders = Vec::new();
+    for (resolution, name) in [(Resolution::P1080, "1080p"), (Resolution::P1440, "1440p")] {
+        let request = RenderRequest {
+            event_name: format!("移動後の確認 {name}"),
+            output_directory: directory.to_string_lossy().into_owned(),
+            resolution,
+            frame_rate: crate::models::FrameRate::default(),
+            clips: clips.clone(),
+            thumbnail: Some(thumbnail.clone()),
+            overwrite: false,
+        };
+        let outcome = run_job(
+            None,
+            Uuid::new_v4().to_string(),
+            request.clone(),
+            CancellationToken::new(),
+        )
+        .await?;
+        let RunOutcome::Completed { encoder, paths } = outcome else {
+            anyhow::bail!("Runtime verification unexpectedly cancelled")
+        };
+        encoders.push(encoder);
+        let probe = media::probe_paths(vec![paths.video.clone()])
+            .await
+            .remove(0);
+        let metadata = probe.media.context("Rendered video could not be probed")?;
+        anyhow::ensure!(
+            (metadata.width, metadata.height) == resolution.dimensions(),
+            "Unexpected output dimensions"
+        );
+        anyhow::ensure!(
+            metadata.video_codec == "h264" && metadata.audio_codec.as_deref() == Some("aac"),
+            "Unexpected output codec"
+        );
+        anyhow::ensure!(
+            (metadata.fps.value() - 60000.0 / 1001.0).abs() < 0.001,
+            "Unexpected output frame rate"
+        );
+        anyhow::ensure!(
+            (metadata.duration_seconds - total_duration(&clips)).abs() < 0.15,
+            "Unexpected output duration"
+        );
+        let chapters = fs::read_to_string(paths.chapters)?;
+        anyhow::ensure!(
+            chapters.lines().count() == 2
+                && chapters.contains("日本語バンド")
+                && chapters.contains("次のバンド"),
+            "Unexpected chapters"
+        );
+        let image = image::open(paths.thumbnail.context("Missing thumbnail")?)?;
+        anyhow::ensure!(
+            image.width() == 1920 && image.height() == 1080,
+            "Unexpected thumbnail"
+        );
+
+        let token = CancellationToken::new();
+        token.cancel();
+        let cancel_id = Uuid::new_v4().to_string();
+        let cancelled = run_job(
+            None,
+            cancel_id.clone(),
+            RenderRequest {
+                event_name: format!("cancel-{name}"),
+                ..request.clone()
+            },
+            token,
+        )
+        .await?;
+        anyhow::ensure!(
+            matches!(cancelled, RunOutcome::Cancelled { .. }),
+            "Cancellation failed"
+        );
+        let cancelled_paths = output_paths_for(&RenderRequest {
+            event_name: format!("cancel-{name}"),
+            ..request.clone()
+        })?;
+        anyhow::ensure!(
+            !Path::new(&cancelled_paths.video).exists()
+                && !partial_path(Path::new(&cancelled_paths.video)).exists(),
+            "Cancelled output was left behind"
+        );
+        let cache = dirs::cache_dir()
+            .context("Missing cache directory")?
+            .join("ARTOFFICE-video-maker");
+        anyhow::ensure!(
+            !cache.join(format!("render-{cancel_id}")).exists(),
+            "Cancelled cache was left behind"
+        );
+    }
+    // Cancel a running FFmpeg child, rather than only cancelling encoder selection.
+    let working = directory.join("cancel-working");
+    fs::create_dir_all(&working)?;
+    let graph = build_filter_graph(&clips, Resolution::P1440, (2560, 1440), &font, &working)?;
+    let request = RenderRequest {
+        event_name: "cancel-process".into(),
+        output_directory: directory.to_string_lossy().into_owned(),
+        resolution: Resolution::P1440,
+        frame_rate: crate::models::FrameRate::default(),
+        clips,
+        thumbnail: None,
+        overwrite: false,
+    };
+    let output = directory.join("cancel-process.partial.mp4");
+    let token = CancellationToken::new();
+    let cancellation = token.clone();
+    let task = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        cancellation.cancel();
+    });
+    let completed = execute_ffmpeg(FfmpegExecution {
+        app: None,
+        job_id: "runtime-cancel",
+        request: &request,
+        encoder: &EncoderConfig {
+            codec: "libx264",
+            label: "CPU（libx264）",
+        },
+        ffmpeg: &ffmpeg,
+        graph: &graph,
+        output: &output,
+        cancellation: &token,
+    })
+    .await?;
+    task.await?;
+    anyhow::ensure!(!completed, "Running FFmpeg did not cancel");
+    let _ = fs::remove_file(output);
+    println!(
+        "{}",
+        serde_json::json!({
+            "status": "passed", "ffmpeg": ffmpeg, "ffprobe": ffprobe, "font": font,
+            "encoders": encoders, "resolutions": ["1080p", "1440p"],
+            "joinedClips": true, "japaneseTitles": true, "thumbnail": true, "cancellation": true
+        })
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -959,6 +1358,92 @@ mod tests {
     use crate::models::{ClipV1, MediaInfo, ProjectV1, Rational, Resolution, SourceFingerprint};
     use crate::{media, project, tools};
     use tokio_util::sync::CancellationToken;
+
+    #[tokio::test]
+    async fn source_settings_render_at_original_size_and_rate() {
+        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../tests/fixtures/sample.mp4")
+            .canonicalize()
+            .unwrap();
+        let info = media::probe_one(&source).await.unwrap();
+        let mut input = clip("Source", info.duration_seconds);
+        input.source_path = source.to_string_lossy().into_owned();
+        input.out_frame_exclusive = info.frame_count;
+        input.media = info;
+        let temp = tempfile::tempdir().unwrap();
+        let request = crate::models::RenderRequest {
+            event_name: "source".into(),
+            output_directory: temp.path().to_string_lossy().into_owned(),
+            resolution: Resolution::Source,
+            frame_rate: crate::models::FrameRate::Source,
+            clips: vec![input],
+            thumbnail: None,
+            overwrite: false,
+        };
+        let fps = request.fps();
+        let graph = super::build_filter_graph_with_rate(
+            &request.clips,
+            request.resolution,
+            request.dimensions(),
+            &tools::font().unwrap(),
+            temp.path(),
+            true,
+            &format!("{}/{}", fps.numerator, fps.denominator),
+        )
+        .unwrap();
+        let output = temp.path().join("output.mp4");
+        let result = StdCommand::new(tools::ffmpeg().unwrap())
+            .current_dir(temp.path())
+            .args(["-hide_banner", "-loglevel", "error", "-i"])
+            .arg(&source)
+            .arg("-filter_complex_script")
+            .arg(graph)
+            .args([
+                "-map", "[vout]", "-map", "[aout]", "-c:v", "libx264", "-c:a", "aac",
+            ])
+            .arg(&output)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let actual = media::probe_one(&output).await.unwrap();
+        assert_eq!((actual.width, actual.height), (96, 64));
+        assert!((actual.fps.value() - 30.0).abs() < 0.001);
+        assert!((actual.duration_seconds - request.clips[0].media.duration_seconds).abs() < 0.1);
+        let encoded = serde_json::to_value(&request).unwrap();
+        assert_eq!(encoded["frameRate"], "source");
+        let mut legacy = encoded;
+        legacy.as_object_mut().unwrap().remove("frameRate");
+        let legacy: crate::models::RenderRequest = serde_json::from_value(legacy).unwrap();
+        assert!((legacy.fps().value() - 60000.0 / 1001.0).abs() < 0.001);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn sleep_inhibitor_is_reaped_after_the_job_guard_is_dropped() {
+        let guard = super::SleepGuard::acquire();
+        let child_id = guard
+            .child
+            .as_ref()
+            .expect("caffeinate must start")
+            .id()
+            .to_string();
+        let is_alive = || {
+            StdCommand::new("/bin/kill")
+                .args(["-0", &child_id])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap()
+                .success()
+        };
+        assert!(is_alive());
+        drop(guard);
+        assert!(!is_alive());
+    }
 
     fn clip(name: &str, seconds: f64) -> ClipV1 {
         let fps = Rational {
@@ -996,6 +1481,42 @@ mod tests {
             join_with_previous: false,
             import_error: None,
         }
+    }
+
+    #[test]
+    fn png_thumbnail_paths_include_existing_file_in_overwrite_check() {
+        use crate::models::{CropRectNormalized, RenderRequest, ThumbnailFormat, ThumbnailV1};
+        let temp = tempfile::tempdir().unwrap();
+        let thumbnail = ThumbnailV1 {
+            source_path: "group.png".into(),
+            preview_path: "preview.jpg".into(),
+            source_width: 96,
+            source_height: 64,
+            exif_orientation: 1,
+            zoom: 1.0,
+            crop: CropRectNormalized {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            output_format: ThumbnailFormat::Png,
+        };
+        let request = RenderRequest {
+            event_name: "ライブ".into(),
+            output_directory: temp.path().to_string_lossy().into_owned(),
+            resolution: Resolution::P1080,
+            frame_rate: crate::models::FrameRate::default(),
+            clips: vec![],
+            thumbnail: Some(thumbnail),
+            overwrite: false,
+        };
+        let first = super::output_paths_for(&request).unwrap();
+        let path = first.thumbnail.unwrap();
+        assert!(path.ends_with("_サムネイル.png"));
+        fs::write(&path, b"existing").unwrap();
+        let second = super::output_paths_for(&request).unwrap();
+        assert_eq!(second.existing, vec![path]);
     }
 
     #[test]
@@ -1082,7 +1603,10 @@ mod tests {
         .into_iter()
         .enumerate()
         {
-            let source = temp.path().join(format!("{}_{}.mp4", index + 1, name));
+            let extension = ["mkv", "mov", "avi"][index];
+            let source = temp
+                .path()
+                .join(format!("{}_{}.{extension}", index + 1, name));
             let status = StdCommand::new(&ffmpeg)
                 .args([
                     "-hide_banner",
@@ -1125,6 +1649,7 @@ mod tests {
         let encoder = choose_encoder(&ffmpeg, &CancellationToken::new())
             .await
             .unwrap();
+        println!("encoder={}", encoder.label);
         let output = temp.path().join("smoke.mp4");
         let mut command = StdCommand::new(&ffmpeg);
         command.current_dir(temp.path());
@@ -1188,7 +1713,9 @@ mod tests {
         let Some(ffprobe) = tools::ffprobe() else {
             return;
         };
-        let Some(font) = tools::font() else { return };
+        if tools::font().is_none() {
+            return;
+        }
         let temp = tempfile::tempdir().unwrap();
         let mut clips = Vec::new();
         for (index, (color, frequency, name)) in [("red", 440, "バンドA"), ("blue", 660, "バンドB")]
@@ -1222,66 +1749,102 @@ mod tests {
             clips.push(value);
         }
 
-        let encoder = choose_encoder(&ffmpeg, &CancellationToken::new())
-            .await
-            .unwrap();
         for (resolution, stem) in [
             (Resolution::P1080, "contract-1080p"),
             (Resolution::P1440, "contract-1440p"),
         ] {
-            let working = temp.path().join(stem);
-            fs::create_dir_all(&working).unwrap();
-            let graph =
-                build_filter_graph(&clips, resolution, resolution.dimensions(), &font, &working)
+            #[cfg(target_os = "macos")]
+            let output = {
+                let outcome = super::run_job(
+                    None,
+                    uuid::Uuid::new_v4().to_string(),
+                    crate::models::RenderRequest {
+                        event_name: stem.into(),
+                        output_directory: temp.path().to_string_lossy().into_owned(),
+                        resolution,
+                        frame_rate: crate::models::FrameRate::default(),
+                        clips: clips.clone(),
+                        thumbnail: None,
+                        overwrite: false,
+                    },
+                    CancellationToken::new(),
+                )
+                .await
+                .unwrap();
+                let super::RunOutcome::Completed { encoder, paths } = outcome else {
+                    panic!("The render contract unexpectedly cancelled")
+                };
+                println!("encoder={encoder}; resolution={stem}");
+                PathBuf::from(paths.video)
+            };
+            // Keep the Windows contract independent of the Tauri GUI runtime.
+            #[cfg(not(target_os = "macos"))]
+            let output = {
+                let encoder = choose_encoder(&ffmpeg, &CancellationToken::new())
+                    .await
                     .unwrap();
-            let output = temp.path().join(format!("{stem}.mp4"));
-            let mut command = StdCommand::new(&ffmpeg);
-            command.current_dir(&working);
-            command.args(["-hide_banner", "-loglevel", "error", "-y"]);
-            for clip in &clips {
-                command.arg("-i").arg(&clip.source_path);
-            }
-            command
-                .arg("-filter_complex_script")
-                .arg(&graph)
-                .args(["-map", "[vout]", "-map", "[aout]", "-c:v", encoder.codec])
-                .args(encoder_args(&encoder, resolution, None))
-                .args([
-                    "-r",
-                    OUTPUT_FPS,
-                    "-pix_fmt",
-                    "yuv420p",
-                    "-color_primaries",
-                    "bt709",
-                    "-color_trc",
-                    "bt709",
-                    "-colorspace",
-                    "bt709",
-                    "-c:a",
-                    "aac",
-                    "-b:a",
-                    "384k",
-                    "-ar",
-                    "48000",
-                    "-ac",
-                    "2",
-                    "-movflags",
-                    "+faststart",
-                ])
-                .arg(&output);
-            let rendered = command.output().unwrap();
-            assert!(
-                rendered.status.success(),
-                "{}",
-                String::from_utf8_lossy(&rendered.stderr)
-            );
+                println!("encoder={}; resolution={stem}", encoder.label);
+                let working = temp.path().join(stem);
+                fs::create_dir_all(&working).unwrap();
+                let graph = build_filter_graph(
+                    &clips,
+                    resolution,
+                    resolution.dimensions(),
+                    &tools::font().unwrap(),
+                    &working,
+                )
+                .unwrap();
+                let output = temp.path().join(format!("{stem}.mp4"));
+                let mut command = StdCommand::new(&ffmpeg);
+                command.current_dir(&working);
+                command.args(["-hide_banner", "-loglevel", "error", "-y"]);
+                for clip in &clips {
+                    command.arg("-i").arg(&clip.source_path);
+                }
+                let rendered = command
+                    .arg("-filter_complex_script")
+                    .arg(graph)
+                    .args(["-map", "[vout]", "-map", "[aout]", "-c:v", encoder.codec])
+                    .args(encoder_args(&encoder, resolution, None))
+                    .args([
+                        "-r",
+                        OUTPUT_FPS,
+                        "-pix_fmt",
+                        "yuv420p",
+                        "-color_primaries",
+                        "bt709",
+                        "-color_trc",
+                        "bt709",
+                        "-colorspace",
+                        "bt709",
+                        "-c:a",
+                        "aac",
+                        "-b:a",
+                        "384k",
+                        "-ar",
+                        "48000",
+                        "-ac",
+                        "2",
+                        "-movflags",
+                        "+faststart",
+                    ])
+                    .arg(&output)
+                    .output()
+                    .unwrap();
+                assert!(
+                    rendered.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&rendered.stderr)
+                );
+                output
+            };
 
             let probe = StdCommand::new(&ffprobe)
                 .args([
                     "-v",
                     "error",
                     "-show_entries",
-                    "stream=codec_type,codec_name,profile,width,height,pix_fmt,avg_frame_rate,sample_rate,channels,color_space,color_transfer,color_primaries",
+                    "stream=codec_type,codec_name,profile,width,height,pix_fmt,avg_frame_rate,duration,nb_frames,sample_rate,channels,color_space,color_transfer,color_primaries",
                     "-of",
                     "json",
                 ])
@@ -1290,6 +1853,7 @@ mod tests {
                 .unwrap();
             assert!(probe.status.success());
             let metadata: serde_json::Value = serde_json::from_slice(&probe.stdout).unwrap();
+            println!("{stem}: {metadata}");
             let streams = metadata["streams"].as_array().unwrap();
             let video = streams
                 .iter()
@@ -1306,6 +1870,12 @@ mod tests {
             assert_eq!(video["height"], expected_height);
             assert_eq!(video["pix_fmt"], "yuv420p");
             assert_eq!(video["avg_frame_rate"], OUTPUT_FPS);
+            let frame_count: f64 = video["nb_frames"].as_str().unwrap().parse().unwrap();
+            let duration: f64 = video["duration"].as_str().unwrap().parse().unwrap();
+            assert!(
+                (duration - frame_count * 1001.0 / 60000.0).abs() < 0.0001,
+                "Frame durations must preserve the complete presentation timeline: {video}"
+            );
             assert_eq!(video["color_space"], "bt709");
             assert_eq!(video["color_transfer"], "bt709");
             assert_eq!(video["color_primaries"], "bt709");
@@ -1313,7 +1883,6 @@ mod tests {
             assert_eq!(audio["sample_rate"], "48000");
             assert_eq!(audio["channels"], 2);
         }
-        println!("encoder={}", encoder.label);
     }
 
     fn band_name_from_path(path: &Path) -> String {
@@ -1381,8 +1950,10 @@ mod tests {
             event_name: event_name.clone(),
             clips: clips.clone(),
             output_resolution: Resolution::P1080,
+            output_frame_rate: crate::models::FrameRate::default(),
             transition_ms: 500,
             thumbnail: None,
+            output_directory: None,
         };
         let project_path = output_directory.join(format!("{event_name}.aovproj"));
         project::write(project_path.to_str().unwrap(), &project_model).unwrap();

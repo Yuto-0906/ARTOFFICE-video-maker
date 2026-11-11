@@ -1,0 +1,31 @@
+name: iOS media formats
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-media-formats-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  formats:
+    runs-on: macos-15
+    timeout-minutes: 40
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Check formats on iPhone and iPad
+        run: bash scripts/ios/ci.sh check formats
+      - uses: actions/upload-artifact@v7.0.1
+        if: always()
+        with:
+          name: ios-format-checks
+          path: |
+            ios/build/*.log
+            ios/build/*.txt
+            ios/build/*.xcresult
+          retention-days: 7

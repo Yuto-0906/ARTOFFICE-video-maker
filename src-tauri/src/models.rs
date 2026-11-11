@@ -94,6 +94,25 @@ pub struct ThumbnailV1 {
     pub exif_orientation: u32,
     pub crop: CropRectNormalized,
     pub zoom: f64,
+    #[serde(default)]
+    pub output_format: ThumbnailFormat,
+}
+
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThumbnailFormat {
+    #[default]
+    Jpg,
+    Png,
+}
+
+impl ThumbnailFormat {
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Jpg => "jpg",
+            Self::Png => "png",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,8 +123,13 @@ pub struct ProjectV1 {
     pub event_name: String,
     pub clips: Vec<ClipV1>,
     pub output_resolution: Resolution,
+    #[serde(default)]
+    pub output_frame_rate: FrameRate,
     pub transition_ms: u32,
     pub thumbnail: Option<ThumbnailV1>,
+    /// 完成動画の保存先。0.4.0以前のプロジェクトには無い。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_directory: Option<String>,
 }
 
 impl ProjectV1 {
@@ -114,7 +138,7 @@ impl ProjectV1 {
         anyhow::ensure!(
             matches!(
                 self.app_version.as_str(),
-                "0.1.0" | "0.2.0" | "0.2.1" | "0.3.0"
+                "0.1.0" | "0.2.0" | "0.2.1" | "0.3.0" | "0.4.0"
             ),
             "未対応のアプリバージョンです。"
         );
@@ -128,6 +152,8 @@ impl ProjectV1 {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum Resolution {
+    #[serde(rename = "source")]
+    Source,
     #[serde(rename = "1080p")]
     P1080,
     #[serde(rename = "1440p")]
@@ -137,6 +163,7 @@ pub enum Resolution {
 impl Resolution {
     pub fn dimensions(self) -> (u32, u32) {
         match self {
+            Self::Source => (1920, 1080),
             Self::P1080 => (1920, 1080),
             Self::P1440 => (2560, 1440),
         }
@@ -144,6 +171,7 @@ impl Resolution {
 
     pub fn bitrate(self) -> u64 {
         match self {
+            Self::Source => 15_000_000,
             Self::P1080 => 15_000_000,
             Self::P1440 => 30_000_000,
         }
@@ -151,8 +179,57 @@ impl Resolution {
 
     pub fn font_size(self) -> f32 {
         match self {
+            Self::Source => 72.0,
             Self::P1080 => 72.0,
             Self::P1440 => 96.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub enum FrameRate {
+    #[serde(rename = "source")]
+    Source,
+    #[serde(rename = "23.976")]
+    F23976,
+    #[serde(rename = "24")]
+    F24,
+    #[serde(rename = "25")]
+    F25,
+    #[serde(rename = "29.97")]
+    F2997,
+    #[serde(rename = "30")]
+    F30,
+    #[serde(rename = "50")]
+    F50,
+    #[default]
+    #[serde(rename = "59.94")]
+    F5994,
+    #[serde(rename = "60")]
+    F60,
+}
+
+impl FrameRate {
+    pub fn resolve(self, source: Option<&MediaInfo>) -> Rational {
+        let (numerator, denominator) = match self {
+            Self::Source => {
+                return source.map(|m| m.fps).unwrap_or(Rational {
+                    numerator: 30,
+                    denominator: 1,
+                })
+            }
+            Self::F23976 => (24000, 1001),
+            Self::F24 => (24, 1),
+            Self::F25 => (25, 1),
+            Self::F2997 => (30000, 1001),
+            Self::F30 => (30, 1),
+            Self::F50 => (50, 1),
+            Self::F5994 => (60000, 1001),
+            Self::F60 => (60, 1),
+        };
+        Rational {
+            numerator,
+            denominator,
         }
     }
 }
@@ -192,9 +269,32 @@ pub struct RenderRequest {
     pub event_name: String,
     pub output_directory: String,
     pub resolution: Resolution,
+    #[serde(default)]
+    pub frame_rate: FrameRate,
     pub clips: Vec<ClipV1>,
     pub thumbnail: Option<ThumbnailV1>,
     pub overwrite: bool,
+}
+
+impl RenderRequest {
+    pub fn dimensions(&self) -> (u32, u32) {
+        match (self.resolution, self.clips.first()) {
+            (Resolution::Source, Some(clip)) => (clip.media.width, clip.media.height),
+            _ => self.resolution.dimensions(),
+        }
+    }
+    pub fn fps(&self) -> Rational {
+        self.frame_rate
+            .resolve(self.clips.first().map(|c| &c.media))
+    }
+    pub fn bitrate(&self) -> u64 {
+        if matches!(self.resolution, Resolution::Source) {
+            let (w, h) = self.dimensions();
+            (15_000_000 * u64::from(w) * u64::from(h) / (1920 * 1080)).clamp(4_000_000, 80_000_000)
+        } else {
+            self.resolution.bitrate()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

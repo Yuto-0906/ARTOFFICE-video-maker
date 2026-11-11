@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "minimumMacOSVersion": "15.0",
+  "sources": {
+    "ffmpeg": {
+      "version": "8.1.2",
+      "fileName": "ffmpeg-8.1.2.tar.xz",
+      "url": "https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz",
+      "sha256": "464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c"
+    },
+    "x264": {
+      "version": "b35605ace3ddf7c1a5d67a2eb553f034aef41d55",
+      "fileName": "x264-b35605ace3ddf7c1a5d67a2eb553f034aef41d55.tar.gz",
+      "url": "https://code.videolan.org/videolan/x264/-/archive/b35605ace3ddf7c1a5d67a2eb553f034aef41d55/x264-b35605ace3ddf7c1a5d67a2eb553f034aef41d55.tar.gz",
+      "sha256": "cd71a7515b0e9a012e1ac9b1f8415bebcaf6fc97d4db32286642ac4c0fbe24f9"
+    },
+    "freetype": {
+      "version": "2.14.3",
+      "fileName": "freetype-2.14.3.tar.xz",
+      "url": "https://download.savannah.gnu.org/releases/freetype/freetype-2.14.3.tar.xz",
+      "sha256": "36bc4f1cc413335368ee656c42afca65c5a3987e8768cc28cf11ba775e785a5f"
+    },
+    "harfbuzz": {
+      "version": "14.6.0",
+      "fileName": "harfbuzz-14.6.0.tar.xz",
+      "url": "https://github.com/harfbuzz/harfbuzz/releases/download/14.6.0/harfbuzz-14.6.0.tar.xz",
+      "sha256": "d07a007327277708a2a73ae437887cdbaf282937f6d03ca5467723e9099af586"
+    },
+    "nasm": {
+      "version": "2.16.03",
+      "fileName": "nasm-2.16.03.tar.xz",
+      "url": "https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/nasm-2.16.03.tar.xz",
+      "sha256": "1412a1c760bbd05db026b6c0d1657affd6631cd0a63cddb6f73cc6d4aa616148"
+    },
+    "pkgconf": {
+      "version": "2.3.0",
+      "fileName": "pkgconf-2.3.0.tar.xz",
+      "url": "https://distfiles.dereferenced.org/pkgconf/pkgconf-2.3.0.tar.xz",
+      "sha256": "3a9080ac51d03615e7c1910a0a2a8df08424892b5f13b0628a204d3fcce0ea8b"
+    }
+  },
+  "buildDependencies": {
+    "mesonVersion": "1.9.1",
+    "ninjaVersion": "1.13.0"
+  }
+}

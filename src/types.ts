@@ -1,4 +1,5 @@
-export type Resolution = "1080p" | "1440p";
+export type Resolution = "source" | "1080p" | "1440p";
+export type FrameRate = "source" | "23.976" | "24" | "25" | "29.97" | "30" | "50" | "59.94" | "60";
 
 export interface Rational {
   numerator: number;
@@ -56,16 +57,20 @@ export interface ThumbnailV1 {
   exifOrientation: number;
   crop: CropRectNormalized;
   zoom: number;
+  outputFormat?: "jpg" | "png";
 }
 
 export interface ProjectV1 {
   schemaVersion: 1;
-  appVersion: "0.1.0" | "0.2.0" | "0.2.1" | "0.3.0";
+  appVersion: "0.1.0" | "0.2.0" | "0.2.1" | "0.3.0" | "0.4.0";
   eventName: string;
   clips: ClipV1[];
   outputResolution: Resolution;
+  outputFrameRate?: FrameRate;
   transitionMs: 500;
   thumbnail: ThumbnailV1 | null;
+  /** 完成動画の保存先。0.4.0以前のプロジェクトには無い。 */
+  outputDirectory?: string;
 }
 
 export interface ParsedFileName {
@@ -100,6 +105,7 @@ export interface RenderRequest {
   eventName: string;
   outputDirectory: string;
   resolution: Resolution;
+  frameRate?: FrameRate;
   clips: ClipV1[];
   thumbnail: ThumbnailV1 | null;
   overwrite: boolean;

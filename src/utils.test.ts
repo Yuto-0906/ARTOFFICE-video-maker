@@ -7,13 +7,18 @@ import {
   centeredCropForAspect,
   clipGroups,
   duplicateOrders,
+  estimateOutputBytes,
   frameToSeconds,
   formatChapterTime,
-  isMp4Path,
+  isVideoPath,
   isThumbnailImagePath,
   moveClipGroup,
   parseClock,
   parseVideoFileName,
+  guessOrderAndBandName,
+  isBlockingImportError,
+  parentDirectory,
+  rulerStep,
   projectDurationSeconds,
   renumberClipOrders,
   secondsToFrame,
@@ -22,17 +27,22 @@ import {
 } from "./utils";
 
 describe("ドラッグ＆ドロップの対応形式", () => {
-  it("MP4の大文字・小文字を判定する", () => {
-    expect(isMp4Path(String.raw`C:\動画\1_バンド.MP4`)).toBe(true);
-    expect(isMp4Path(String.raw`C:\動画\1_バンド.mp4`)).toBe(true);
-    expect(isMp4Path(String.raw`C:\動画\1_バンド.mov`)).toBe(false);
+  it("動画の大文字・小文字を判定する", () => {
+    expect(isVideoPath(String.raw`C:\動画\1_バンド.MP4`)).toBe(true);
+    expect(isVideoPath(String.raw`C:\動画\1_バンド.mp4`)).toBe(true);
+    ["mkv", "MOV", "webm", "MTS", "m2ts", "AVI", "wmv"].forEach((extension) => {
+      expect(isVideoPath(`C:/動画/1_バンド.${extension}`)).toBe(true);
+    });
+    ["mp3", "txt", "mp4.exe", ""].forEach((extension) => {
+      expect(isVideoPath(`C:/動画/1_バンド.${extension}`)).toBe(false);
+    });
   });
 
   it("サムネイル用画像の対応形式を判定する", () => {
-    ["jpg", "JPEG", "png", "HEIC", "heif"].forEach((extension) => {
+    ["jpg", "JPEG", "png", "HEIC", "heif", "webp", "TIF", "tiff", "BMP", "avif", "GIF"].forEach((extension) => {
       expect(isThumbnailImagePath(`C:\\写真\\集合写真.${extension}`)).toBe(true);
     });
-    expect(isThumbnailImagePath(String.raw`C:\写真\集合写真.webp`)).toBe(false);
+    expect(isThumbnailImagePath(String.raw`C:\写真\集合写真.svg`)).toBe(false);
   });
 });
 
@@ -135,8 +145,8 @@ describe("chapter calculation", () => {
 
   it("YouTubeの章数と最短時間の条件を警告する", () => {
     expect(chapterWarnings([clip("A", 8), clip("B", 12)])).toEqual([
-      "YouTubeのチャプター表示には3件以上の時刻が必要です。",
-      "Aは10秒未満のため，YouTubeでチャプターとして認識されない可能性があります。",
+      "YouTubeのチャプターは3つ以上ないと表示されません。",
+      "A：10秒未満のため，YouTubeではチャプターになりません。",
     ]);
   });
 
@@ -153,7 +163,7 @@ describe("chapter calculation", () => {
       { seconds: 17, text: "次のバンド" },
     ]);
     expect(projectDurationSeconds(clips)).toBeCloseTo(37.5, 1);
-    expect(chapterWarnings(clips)).toEqual(["YouTubeのチャプター表示には3件以上の時刻が必要です。"]);
+    expect(chapterWarnings(clips)).toEqual(["YouTubeのチャプターは3つ以上ないと表示されません。"]);
   });
 });
 
@@ -190,7 +200,7 @@ describe("time entry", () => {
 });
 
 describe("project compatibility", () => {
-  it("v0.1.0～v0.3.0の保存データを読み込める", () => {
+  it("v0.1.0～v0.4.0の保存データを読み込める", () => {
     const base = {
       schemaVersion: 1,
       eventName: "8月ライブ",
@@ -203,5 +213,50 @@ describe("project compatibility", () => {
     expect(validateProject({ ...base, appVersion: "0.2.0" })).toBe(true);
     expect(validateProject({ ...base, appVersion: "0.2.1" })).toBe(true);
     expect(validateProject({ ...base, appVersion: "0.3.0" })).toBe(true);
+    expect(validateProject({ ...base, appVersion: "0.4.0" })).toBe(true);
+  });
+});
+
+
+describe("source output settings", () => {
+  it("自動設定を保存でき，不正なレートを拒否する", () => {
+    const project = { schemaVersion: 1, appVersion: "0.4.0", eventName: "Live", clips: [], outputResolution: "source", outputFrameRate: "source", transitionMs: 500, thumbnail: null };
+    expect(validateProject(JSON.parse(JSON.stringify(project)))).toBe(true);
+    expect(validateProject({ ...project, outputFrameRate: "120" })).toBe(false);
+  });
+  it("自動解像度の見積もりを先頭素材の画素数に合わせる", () => {
+    expect(estimateOutputBytes(60, "source", { width: 3840, height: 2160 })).toBe((60_000_000 + 384_000) * 60 / 8);
+    expect(estimateOutputBytes(60, "1080p")).toBe((15_000_000 + 384_000) * 60 / 8);
+  });
+});
+
+describe("guessOrderAndBandName", () => {
+  it("アンダースコア以外の区切りも出演順として読む", () => {
+    expect(guessOrderAndBandName("01 MOSHIMO.mp4")).toEqual({ order: 1, bandName: "MOSHIMO" });
+    expect(guessOrderAndBandName("3-東京事変.MOV")).toEqual({ order: 3, bandName: "東京事変" });
+    expect(guessOrderAndBandName("2_Mrs. GREEN APPLE.MP4")).toEqual({ order: 2, bandName: "Mrs. GREEN APPLE" });
+  });
+
+  it("番号が無ければファイル名をバンド名にする", () => {
+    expect(guessOrderAndBandName("MOSHIMO.mp4")).toEqual({ order: null, bandName: "MOSHIMO" });
+    expect(guessOrderAndBandName("0_MOSHIMO.mp4")).toEqual({ order: null, bandName: "0_MOSHIMO" });
+  });
+});
+
+describe("表示用の補助関数", () => {
+  it("親フォルダーのパスを返す", () => {
+    expect(parentDirectory(String.raw`C:\ライブ\1_A.mp4`)).toBe(String.raw`C:\ライブ`);
+    expect(parentDirectory("/Users/a/live/1_A.mp4")).toBe("/Users/a/live");
+  });
+
+  it("目盛りの間隔を長さに合わせて選ぶ", () => {
+    expect(rulerStep(40)).toBe(5);
+    expect(rulerStep(30 * 60)).toBe(300);
+  });
+
+  it("旧版のファイル名の注意は書き出しを止めない", () => {
+    expect(isBlockingImportError({ importError: "ファイル名を「出演順_バンド名.拡張子」にしてください。" })).toBe(false);
+    expect(isBlockingImportError({ importError: "元動画が見つかりません。" })).toBe(true);
+    expect(isBlockingImportError({})).toBe(false);
   });
 });

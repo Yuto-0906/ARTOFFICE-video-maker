@@ -1,0 +1,72 @@
+workflows:
+  ios-check:
+    name: ARTOFFICE iOS checks
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    environment:
+      xcode: '27.1'
+    scripts:
+      - name: Build and test iPhone and iPad
+        script: bash scripts/ios/ci.sh check
+    artifacts:
+      - ios/build/*.log
+      - ios/build/*.txt
+      - ios/build/*.xcresult
+      - ios/build/*-screenshots/**
+      - ios/build/device/Build/Products/Debug-iphoneos/ARTOFFICE.app
+  ios-media-check:
+    name: ARTOFFICE targeted media checks
+    instance_type: mac_mini_m2
+    max_build_duration: 45
+    environment:
+      xcode: '27.1'
+    scripts:
+      - name: Verify import guards and output formats
+        script: bash scripts/ios/ci.sh check media
+    artifacts:
+      - ios/build/*.log
+      - ios/build/*.txt
+      - ios/build/*.xcresult
+  ios-storage-check:
+    name: ARTOFFICE storage checks
+    instance_type: mac_mini_m2
+    max_build_duration: 30
+    environment:
+      xcode: '27.1'
+    scripts:
+      - name: Verify completed-output cleanup and recovery
+        script: bash scripts/ios/ci.sh check storage
+    artifacts:
+      - ios/build/*.log
+      - ios/build/*.txt
+      - ios/build/*.xcresult
+  ios-ui-check:
+    name: ARTOFFICE editor UI checks
+    instance_type: mac_mini_m2
+    max_build_duration: 30
+    environment:
+      xcode: '27.1'
+    scripts:
+      - name: Verify touch editing and saved-project relaunch
+        script: bash scripts/ios/ci.sh check ui
+    artifacts:
+      - ios/build/*.log
+      - ios/build/*.txt
+      - ios/build/*.xcresult
+      - ios/build/*-screenshots/**
+  ios-device:
+    name: ARTOFFICE registered-device IPA
+    instance_type: mac_mini_m2
+    max_build_duration: 45
+    environment:
+      xcode: '27.1'
+      groups:
+        - artoffice_ios_signing
+    scripts:
+      - name: Build signed development app
+        script: bash scripts/ios/ci.sh device
+    artifacts:
+      - ios/build/*.ipa
+      - ios/build/*.log
+      - ios/build/*.txt
+      - ios/build/signing-report.json

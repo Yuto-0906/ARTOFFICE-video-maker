@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import Cropper, { type Area, type Point } from "react-easy-crop";
+import type { Area } from "react-easy-crop";
 import type {
   ClipV1,
   OutputPaths,
@@ -14,93 +14,162 @@ import type {
   RenderProgress,
   RenderRequest,
   RenderStarted,
-  Resolution,
   ThumbnailV1,
   ToolStatus,
 } from "./types";
 import {
   basename,
-  bandCount,
-  chapterRows,
-  chapterWarnings,
   centeredCropForAspect,
-  clipDurationSeconds,
   clipGroups,
-  duplicateOrders,
-  estimateOutputBytes,
-  formatBytes,
-  formatChapterTime,
-  formatClock,
-  frameToSeconds,
-  isMp4Path,
+  guessOrderAndBandName,
   isThumbnailImagePath,
-  parentFolderName,
-  parseClock,
-  parseVideoFileName,
-  projectDurationSeconds,
+  isVideoPath,
   moveClipGroup,
+  parentDirectory,
+  parentFolderName,
   renumberClipOrders,
-  secondsToFrame,
   sortClipsByOrder,
+  THUMBNAIL_EXTENSIONS,
   validateProject,
+  VIDEO_EXTENSIONS,
 } from "./utils";
-
-type Step = "import" | "trim" | "thumbnail" | "export";
+import { errorMessage, isMac, MOD, projectIssues, safeEventName, type Step } from "./shared";
+import { RedoIcon, UndoIcon } from "./icons";
+import logoUrl from "./assets/logo.png";
+import ImportStep from "./steps/ImportStep";
+import TrimStep from "./steps/TrimStep";
+import ThumbnailStep from "./steps/ThumbnailStep";
+import ExportStep from "./steps/ExportStep";
 
 const EMPTY_PROJECT: ProjectV1 = {
   schemaVersion: 1,
-  appVersion: "0.3.0",
+  appVersion: "0.4.0",
   eventName: "",
   clips: [],
-  outputResolution: "1080p",
+  outputResolution: "source",
+  outputFrameRate: "source",
   transitionMs: 500,
   thumbnail: null,
 };
 
-const STEPS: Array<{ id: Step; index: number; label: string; description: string }> = [
-  { id: "import", index: 1, label: "動画読込", description: "順番と名前" },
-  { id: "trim", index: 2, label: "トリミング", description: "開始・終了位置" },
-  { id: "thumbnail", index: 3, label: "サムネイル", description: "16:9切り抜き" },
-  { id: "export", index: 4, label: "書き出し", description: "動画とチャプター" },
+const STEPS: Array<{ id: Step; label: string }> = [
+  { id: "import", label: "動画" },
+  { id: "trim", label: "カット" },
+  { id: "thumbnail", label: "サムネイル" },
+  { id: "export", label: "書き出し" },
 ];
 
-function errorMessage(error: unknown): string {
-  if (typeof error === "string") return error;
-  if (error instanceof Error) return error.message;
-  return JSON.stringify(error);
+const PROJECT_FILTER = [{ name: "ARTOFFICE動画プロジェクト", extensions: ["aovproj"] }];
+/** この間隔内に同じ種類の変更が続いた場合は，元に戻す単位を1つにまとめる */
+const HISTORY_MERGE_MS = 800;
+const AUTOSAVE_DELAY_MS = 1500;
+
+interface Toast {
+  id: number;
+  text: string;
+  action?: { label: string; run: () => void };
 }
 
-function safeEventName(value: string): string {
-  return value.trim().replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").replace(/[. ]+$/, "") || "ライブ動画";
+interface Confirmation {
+  title: string;
+  body: string;
+  confirmLabel: string;
+  danger?: boolean;
+  onConfirm: () => void;
 }
+
+type SaveState = "idle" | "saving" | "error";
 
 export default function App() {
-  const [project, setProject] = useState<ProjectV1>(EMPTY_PROJECT);
+  const [project, setProjectState] = useState<ProjectV1>(EMPTY_PROJECT);
+  const projectRef = useRef(project);
+  const history = useRef<{ past: ProjectV1[]; future: ProjectV1[]; lastKey?: string; lastAt: number }>({ past: [], future: [], lastAt: 0 });
+  const [historySize, setHistorySize] = useState({ past: 0, future: 0 });
   const [projectPath, setProjectPath] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
+  const [saveState, setSaveState] = useState<SaveState>("idle");
   const [step, setStep] = useState<Step>("import");
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [toasts, setToasts] = useState<Toast[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [toolStatus, setToolStatus] = useState<ToolStatus | null>(null);
-  const [draggedClipId, setDraggedClipId] = useState<string | null>(null);
-  const [outputDirectory, setOutputDirectory] = useState("");
   const [renderJobId, setRenderJobId] = useState<string | null>(null);
   const [renderProgress, setRenderProgress] = useState<RenderProgress | null>(null);
   const [renderResult, setRenderResult] = useState<RenderFinished | null>(null);
+  const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [closeRequested, setCloseRequested] = useState(false);
   const [closing, setClosing] = useState(false);
   const [fileDragActive, setFileDragActive] = useState(false);
 
   const selectedClip = project.clips.find((clip) => clip.id === selectedClipId) ?? project.clips[0] ?? null;
-  const duplicateSet = useMemo(() => duplicateOrders(project.clips), [project.clips]);
-  const durationSeconds = useMemo(() => projectDurationSeconds(project.clips), [project.clips]);
+  const outputDirectory = project.outputDirectory ?? (project.clips[0] ? parentDirectory(project.clips[0].sourcePath) : "");
+  const issues = useMemo(() => projectIssues(project, outputDirectory), [project, outputDirectory]);
 
-  const updateProject = useCallback((updater: (current: ProjectV1) => ProjectV1) => {
-    setProject((current) => updater(current));
+  // ---- プロジェクトの状態と元に戻す ----
+
+  const syncHistorySize = () => setHistorySize({ past: history.current.past.length, future: history.current.future.length });
+
+  const replaceProject = useCallback((next: ProjectV1, options: { resetHistory?: boolean } = {}) => {
+    projectRef.current = next;
+    setProjectState(next);
+    if (options.resetHistory) {
+      history.current = { past: [], future: [], lastAt: 0 };
+      syncHistorySize();
+    }
+  }, []);
+
+  /** key が同じ変更は短時間ならまとめて1回の「元に戻す」で戻る */
+  const updateProject = useCallback((updater: (current: ProjectV1) => ProjectV1, key?: string) => {
+    const current = projectRef.current;
+    const next = updater(current);
+    if (next === current) return;
+    const h = history.current;
+    const now = Date.now();
+    if (!(key && h.lastKey === key && now - h.lastAt < HISTORY_MERGE_MS)) {
+      h.past.push(current);
+      if (h.past.length > 200) h.past.shift();
+    }
+    h.lastKey = key;
+    h.lastAt = now;
+    h.future = [];
+    syncHistorySize();
+    projectRef.current = next;
+    setProjectState(next);
     setDirty(true);
   }, []);
+
+  const undo = useCallback(() => {
+    const h = history.current;
+    const previous = h.past.pop();
+    if (!previous) return;
+    h.future.push(projectRef.current);
+    h.lastKey = undefined;
+    syncHistorySize();
+    projectRef.current = previous;
+    setProjectState(previous);
+    setDirty(true);
+  }, []);
+
+  const redo = useCallback(() => {
+    const h = history.current;
+    const next = h.future.pop();
+    if (!next) return;
+    h.past.push(projectRef.current);
+    h.lastKey = undefined;
+    syncHistorySize();
+    projectRef.current = next;
+    setProjectState(next);
+    setDirty(true);
+  }, []);
+
+  const showToast = useCallback((text: string, action?: Toast["action"]) => {
+    const id = Date.now() + Math.random();
+    setToasts((current) => [...current.slice(-2), { id, text, action }]);
+    setTimeout(() => setToasts((current) => current.filter((toast) => toast.id !== id)), action ? 7000 : 3500);
+  }, []);
+
+  // ---- 起動時・書き出しイベント ----
 
   useEffect(() => {
     invoke<ToolStatus>("tool_status")
@@ -108,13 +177,11 @@ export default function App() {
         setToolStatus(status);
         if (status.fontPath) {
           try {
-            const font = new FontFace("AOV Noto Sans JP", `url(${convertFileSrc(status.fontPath)})`, {
-              weight: "900",
-            });
+            const font = new FontFace("AOV Noto Sans JP", `url(${convertFileSrc(status.fontPath)})`, { weight: "900" });
             await font.load();
             document.fonts.add(font);
           } catch {
-            // Windowsにインストール済みのNoto Sans JPへフォールバックする。
+            // 読み込めない場合はシステムの日本語フォントで表示する。
           }
         }
       })
@@ -128,116 +195,54 @@ export default function App() {
     const unlistenFinished = listen<RenderFinished>("render-finished", ({ payload }) => {
       setRenderJobId((current) => (current === payload.jobId ? null : current));
       setRenderResult(payload);
-      if (payload.status === "completed") {
-        setNotice("書き出しが完了しました。");
-      } else if (payload.status === "failed") {
-        setError(payload.error ?? "書き出しに失敗しました。");
-      } else {
-        setNotice("書き出しをキャンセルしました。");
-      }
+      if (payload.status === "completed") showToast("書き出しました");
+      else if (payload.status === "failed") setError(payload.error ?? "書き出しに失敗しました。");
+      else showToast("書き出しを中止しました");
     });
     return () => {
       void unlistenProgress.then((unlisten) => unlisten());
       void unlistenFinished.then((unlisten) => unlisten());
     };
-  }, []);
+  }, [showToast]);
 
   useEffect(() => {
-    const appWindow = getCurrentWindow();
-    const unlisten = appWindow.onCloseRequested((event) => {
-      if (dirty || renderJobId) {
-        event.preventDefault();
-        setCloseRequested(true);
-      }
-    });
-    return () => {
-      void unlisten.then((remove) => remove());
-    };
-  }, [dirty, renderJobId]);
-
-  useEffect(() => {
-    if (project.clips.length === 0) {
-      setSelectedClipId(null);
-    } else if (!project.clips.some((clip) => clip.id === selectedClipId)) {
-      setSelectedClipId(project.clips[0].id);
-    }
+    if (project.clips.length === 0) setSelectedClipId(null);
+    else if (!project.clips.some((clip) => clip.id === selectedClipId)) setSelectedClipId(project.clips[0].id);
   }, [project.clips, selectedClipId]);
 
-  const addVideoPaths = useCallback(
-    async (paths: string[]) => {
-      if (paths.length === 0) return;
-      setBusy(true);
-      setError(null);
-      try {
-        const results = await invoke<ProbeResult[]>("probe_media", { paths });
-        const existing = new Set(project.clips.map((clip) => clip.sourcePath.toLocaleLowerCase()));
-        const failures: string[] = [];
-        const imported: ClipV1[] = [];
-        let fallbackOrder = Math.max(0, ...project.clips.map((clip) => clip.order)) + 1;
+  // ---- 保存 ----
 
-        results.forEach((result) => {
-          if (existing.has(result.path.toLocaleLowerCase())) return;
-          if (!result.media) {
-            failures.push(`${result.fileName}: ${result.error ?? "動画を解析できませんでした。"}`);
-            return;
-          }
-          const parsed = parseVideoFileName(result.fileName);
-          const order = parsed?.order ?? fallbackOrder++;
-          imported.push({
-            id: crypto.randomUUID(),
-            sourcePath: result.path,
-            sourceFileName: result.fileName,
-            fingerprint: result.fingerprint,
-            order,
-            bandName: parsed?.bandName ?? result.fileName.replace(/\.[^.]+$/, ""),
-            inFrame: 0,
-            outFrameExclusive: result.media.frameCount,
-            media: result.media,
-            joinWithPrevious: false,
-            importError: parsed ? undefined : "ファイル名を「出演順_バンド名.MP4」にしてください。",
-          });
-        });
-
-        const clips = sortClipsByOrder([...project.clips, ...imported]);
-        const inferredName = project.eventName || parentFolderName(paths[0]);
-        setProject((current) => ({ ...current, eventName: inferredName, clips }));
-        setDirty(imported.length > 0 || dirty);
-        if (imported[0]) setSelectedClipId(imported[0].id);
-        if (failures.length > 0) setError(failures.join("\n"));
-        setNotice(`${imported.length}本の動画を読み込みました。`);
-      } catch (reason) {
-        setError(errorMessage(reason));
-      } finally {
-        setBusy(false);
-      }
-    },
-    [dirty, project.clips, project.eventName],
-  );
-
-  async function chooseVideoFiles() {
-    const selection = await open({
-      multiple: true,
-      directory: false,
-      filters: [{ name: "MP4動画", extensions: ["mp4", "MP4"] }],
-    });
-    if (Array.isArray(selection)) await addVideoPaths(selection);
-    else if (selection) await addVideoPaths([selection]);
-  }
-
-  async function chooseVideoFolder() {
-    const folder = await open({ directory: true, multiple: false });
-    if (!folder || Array.isArray(folder)) return;
-    setBusy(true);
+  const saveProject = useCallback(async (saveAs = false): Promise<boolean> => {
     try {
-      const paths = await invoke<string[]>("list_mp4_files", { folder });
-      await addVideoPaths(paths);
-      if (paths.length === 0) setNotice("選択したフォルダーにMP4ファイルがありませんでした。");
+      let destination = saveAs ? null : projectPath;
+      if (!destination) {
+        destination = await save({ defaultPath: `${safeEventName(projectRef.current.eventName)}.aovproj`, filters: PROJECT_FILTER });
+      }
+      if (!destination) return false;
+      if (!destination.toLocaleLowerCase().endsWith(".aovproj")) destination += ".aovproj";
+      const snapshot = projectRef.current;
+      setSaveState("saving");
+      await invoke("write_project", { path: destination, project: snapshot });
+      setProjectPath(destination);
+      setSaveState("idle");
+      // 保存中に編集が続いた場合は未保存のままにする。
+      if (projectRef.current === snapshot) setDirty(false);
+      return true;
     } catch (reason) {
-      setError(errorMessage(reason));
-    } finally {
-      setBusy(false);
+      setSaveState("error");
+      setError(`保存できませんでした。\n${errorMessage(reason)}`);
+      return false;
     }
-  }
+  }, [projectPath]);
+
+  // 一度保存したプロジェクトは自動で上書き保存する。
+  useEffect(() => {
+    if (!dirty || !projectPath || closing || saveState === "error") return;
+    const timer = setTimeout(() => void saveProject(false), AUTOSAVE_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [project, dirty, projectPath, closing, saveState, saveProject]);
+
+  // ---- 読込 ----
 
   async function refreshProjectMedia(loaded: ProjectV1): Promise<ProjectV1> {
     if (loaded.clips.length === 0) return loaded;
@@ -247,146 +252,217 @@ export default function App() {
       ...loaded,
       clips: loaded.clips.map((clip) => {
         const current = byPath.get(clip.sourcePath.toLocaleLowerCase());
-        if (!current?.media) return { ...clip, importError: current?.error ?? "元動画が見つかりません。" };
+        if (!current?.media) return { ...clip, importError: current?.error ?? "元動画が見つかりません" };
         const inFrame = Math.min(clip.inFrame, Math.max(0, current.media.frameCount - 1));
         const outFrameExclusive = Math.max(inFrame + 1, Math.min(clip.outFrameExclusive, current.media.frameCount));
-        return {
-          ...clip,
-          media: current.media,
-          fingerprint: current.fingerprint,
-          inFrame,
-          outFrameExclusive,
-          importError: undefined,
-        };
+        return { ...clip, media: current.media, fingerprint: current.fingerprint, inFrame, outFrameExclusive, importError: undefined };
       }),
     };
   }
 
-  async function openProject() {
-    const selection = await open({
-      multiple: false,
-      directory: false,
-      filters: [{ name: "ARTOFFICE動画プロジェクト", extensions: ["aovproj"] }],
-    });
-    if (!selection || Array.isArray(selection)) return;
-    setBusy(true);
+  const addVideoPaths = useCallback(async (paths: string[]) => {
+    if (paths.length === 0) return;
+    setBusy(`動画を確認しています（${paths.length}本）`);
     setError(null);
     try {
-      const loaded = await invoke<unknown>("read_project", { path: selection });
-      if (!validateProject(loaded)) throw new Error("対応していないプロジェクト形式です。");
-      let refreshed = await refreshProjectMedia(loaded);
-      if (refreshed.thumbnail) {
-        try {
-          const prepared = await invoke<PreparedThumbnail>("prepare_thumbnail", {
-            sourcePath: refreshed.thumbnail.sourcePath,
-          });
-          refreshed = {
-            ...refreshed,
-            thumbnail: {
-              ...refreshed.thumbnail,
-              previewPath: prepared.previewPath,
-              sourceWidth: prepared.sourceWidth,
-              sourceHeight: prepared.sourceHeight,
-              exifOrientation: prepared.exifOrientation,
-            },
-          };
-        } catch (reason) {
-          setNotice(`サムネイル画像を再読込できませんでした: ${errorMessage(reason)}`);
+      const results = await invoke<ProbeResult[]>("probe_media", { paths });
+      const current = projectRef.current;
+      const existing = new Set(current.clips.map((clip) => clip.sourcePath.toLocaleLowerCase()));
+      const failures: string[] = [];
+      const imported: ClipV1[] = [];
+      let skipped = 0;
+      // 番号の無い動画は，番号付きの動画（今回追加する分も含む）の後ろに並べる。
+      const guessedOrders = results.map((result) => guessOrderAndBandName(result.fileName).order ?? 0);
+      let fallbackOrder = Math.max(0, ...current.clips.map((clip) => clip.order), ...guessedOrders) + 1;
+
+      results.forEach((result) => {
+        if (existing.has(result.path.toLocaleLowerCase())) {
+          skipped += 1;
+          return;
         }
+        if (!result.media) {
+          failures.push(`${result.fileName}：${result.error ?? "動画として読み込めませんでした"}`);
+          return;
+        }
+        const guessed = guessOrderAndBandName(result.fileName);
+        imported.push({
+          id: crypto.randomUUID(),
+          sourcePath: result.path,
+          sourceFileName: result.fileName,
+          fingerprint: result.fingerprint,
+          order: guessed.order ?? fallbackOrder++,
+          bandName: guessed.bandName,
+          inFrame: 0,
+          outFrameExclusive: result.media.frameCount,
+          media: result.media,
+          joinWithPrevious: false,
+        });
+      });
+
+      if (imported.length > 0) {
+        updateProject((latest) => ({
+          ...latest,
+          eventName: latest.eventName || parentFolderName(paths[0]),
+          clips: sortClipsByOrder([...latest.clips, ...imported]),
+        }));
+        setSelectedClipId(imported[0].id);
       }
-      setProject(refreshed);
-      setProjectPath(selection);
-      setSelectedClipId(refreshed.clips[0]?.id ?? null);
-      setDirty(false);
-      setStep("import");
-      setNotice("プロジェクトを開きました。");
+      if (failures.length > 0) setError(`読み込めなかった動画があります。\n${failures.join("\n")}`);
+      if (imported.length > 0) showToast(`${imported.length}本追加しました${skipped ? `（${skipped}本は追加済み）` : ""}`);
+      else if (skipped > 0) showToast("すべて追加済みの動画です");
     } catch (reason) {
       setError(errorMessage(reason));
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
+  }, [showToast, updateProject]);
+
+  async function chooseVideoFiles() {
+    const selection = await open({
+      multiple: true,
+      directory: false,
+      filters: [{ name: "動画", extensions: VIDEO_EXTENSIONS.flatMap((extension) => [extension, extension.toUpperCase()]) }],
+    });
+    if (Array.isArray(selection)) await addVideoPaths(selection);
+    else if (selection) await addVideoPaths([selection]);
   }
 
-  async function saveProject(saveAs = false): Promise<boolean> {
-    try {
-      let destination = saveAs ? null : projectPath;
-      if (!destination) {
-        destination = await save({
-          defaultPath: `${safeEventName(project.eventName)}.aovproj`,
-          filters: [{ name: "ARTOFFICE動画プロジェクト", extensions: ["aovproj"] }],
-        });
+  async function listFolders(folders: string[]): Promise<string[]> {
+    const found: string[] = [];
+    for (const folder of folders) {
+      try {
+        found.push(...await invoke<string[]>("list_video_files", { folder }));
+      } catch {
+        // フォルダーでないものは無視する。
       }
-      if (!destination) return false;
-      if (!destination.toLocaleLowerCase().endsWith(".aovproj")) destination += ".aovproj";
-      await invoke("write_project", { path: destination, project });
-      setProjectPath(destination);
-      setDirty(false);
-      setNotice("プロジェクトを保存しました。");
-      return true;
-    } catch (reason) {
-      setError(errorMessage(reason));
-      return false;
     }
+    return found;
+  }
+
+  async function chooseVideoFolder() {
+    const folder = await open({ directory: true, multiple: false });
+    if (!folder || Array.isArray(folder)) return;
+    setBusy("フォルダーを確認しています");
+    const paths = await listFolders([folder]);
+    setBusy(null);
+    if (paths.length === 0) {
+      setError("このフォルダーには使える動画がありません。");
+      return;
+    }
+    await addVideoPaths(paths);
   }
 
   async function relinkMissingSources() {
     const folder = await open({ directory: true, multiple: false });
     if (!folder || Array.isArray(folder)) return;
-    setBusy(true);
+    setBusy("元動画を探しています");
     try {
-      const candidates = await invoke<string[]>("list_mp4_files", { folder });
+      const candidates = await invoke<string[]>("list_video_files", { folder });
       const byName = new Map(candidates.map((path) => [basename(path).toLocaleLowerCase(), path]));
-      const changed = project.clips.map((clip) => ({
+      const current = projectRef.current;
+      const changed = current.clips.map((clip) => ({
         ...clip,
         sourcePath: clip.importError ? (byName.get(clip.sourceFileName.toLocaleLowerCase()) ?? clip.sourcePath) : clip.sourcePath,
       }));
-      const refreshed = await refreshProjectMedia({ ...project, clips: changed });
-      setProject(refreshed);
-      setDirty(true);
-      setNotice("元動画の再リンクを確認しました。");
+      const refreshed = await refreshProjectMedia({ ...current, clips: changed });
+      updateProject(() => refreshed);
+      const stillMissing = refreshed.clips.filter((clip) => clip.importError).length;
+      showToast(stillMissing ? `${stillMissing}本はまだ見つかりません` : "元動画が見つかりました");
     } catch (reason) {
       setError(errorMessage(reason));
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   }
 
-  function updateClip(id: string, updater: (clip: ClipV1) => ClipV1) {
-    updateProject((current) => ({
-      ...current,
-      clips: current.clips.map((clip) => (clip.id === id ? updater(clip) : clip)),
-    }));
+  // ---- プロジェクトを開く・新規 ----
+
+  function guardUnsaved(action: () => void) {
+    if (!dirty || projectPath || projectRef.current.clips.length === 0) {
+      action();
+      return;
+    }
+    setConfirmation({
+      title: "保存していない変更があります",
+      body: "このまま続けると，今の編集内容は失われます。",
+      confirmLabel: "保存せずに続ける",
+      danger: true,
+      onConfirm: action,
+    });
+  }
+
+  function newProject() {
+    replaceProject(EMPTY_PROJECT, { resetHistory: true });
+    setProjectPath(null);
+    setDirty(false);
+    setRenderResult(null);
+    setStep("import");
+  }
+
+  async function openProject() {
+    const selection = await open({ multiple: false, directory: false, filters: PROJECT_FILTER });
+    if (!selection || Array.isArray(selection)) return;
+    setBusy("プロジェクトを開いています");
+    setError(null);
+    try {
+      const loaded = await invoke<unknown>("read_project", { path: selection });
+      if (!validateProject(loaded)) throw new Error("このアプリで作ったプロジェクトではないか，新しい版で保存されています。");
+      let refreshed = await refreshProjectMedia(loaded);
+      if (refreshed.thumbnail) {
+        try {
+          const prepared = await invoke<PreparedThumbnail>("prepare_thumbnail", { sourcePath: refreshed.thumbnail.sourcePath });
+          refreshed = {
+            ...refreshed,
+            thumbnail: { ...refreshed.thumbnail, previewPath: prepared.previewPath, sourceWidth: prepared.sourceWidth, sourceHeight: prepared.sourceHeight, exifOrientation: prepared.exifOrientation },
+          };
+        } catch (reason) {
+          setError(`サムネイルの写真を開けませんでした。\n${errorMessage(reason)}`);
+        }
+      }
+      replaceProject(refreshed, { resetHistory: true });
+      setProjectPath(selection);
+      setSelectedClipId(refreshed.clips[0]?.id ?? null);
+      setDirty(false);
+      setSaveState("idle");
+      setRenderResult(null);
+      setStep("import");
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // ---- 動画一覧の編集 ----
+
+  function updateClip(id: string, updater: (clip: ClipV1) => ClipV1, key?: string) {
+    updateProject((current) => ({ ...current, clips: current.clips.map((clip) => (clip.id === id ? updater(clip) : clip)) }), key);
   }
 
   function updateBandName(id: string, bandName: string) {
     updateProject((current) => {
-      const groups = clipGroups(current.clips);
-      const group = groups.find((candidate) => candidate.some((clip) => clip.id === id));
+      const group = clipGroups(current.clips).find((candidate) => candidate.some((clip) => clip.id === id));
       if (!group) return current;
       const ids = new Set(group.map((clip) => clip.id));
       return {
         ...current,
-        clips: current.clips.map((clip) => ids.has(clip.id) ? {
-          ...clip,
-          bandName,
-          importError: clip.importError?.startsWith("ファイル名") ? undefined : clip.importError,
-        } : clip),
+        clips: current.clips.map((clip) => ids.has(clip.id) ? { ...clip, bandName, importError: clip.importError?.startsWith("ファイル名") ? undefined : clip.importError } : clip),
       };
-    });
+    }, `band:${id}`);
   }
 
   function removeClip(id: string) {
+    const removed = projectRef.current.clips.find((clip) => clip.id === id);
     updateProject((current) => {
       const clips = [...current.clips];
       const index = clips.findIndex((clip) => clip.id === id);
       if (index < 0) return current;
       const removedStartedBand = index === 0 || !clips[index].joinWithPrevious;
       clips.splice(index, 1);
-      if (removedStartedBand && clips[index]?.joinWithPrevious) {
-        clips[index] = { ...clips[index], joinWithPrevious: false };
-      }
+      if (removedStartedBand && clips[index]?.joinWithPrevious) clips[index] = { ...clips[index], joinWithPrevious: false };
       return { ...current, clips: renumberClipOrders(clips) };
     });
+    if (removed) showToast(`「${removed.bandName}」を外しました`, { label: "元に戻す", run: undo });
   }
 
   function moveClip(sourceId: string, targetId: string) {
@@ -414,39 +490,31 @@ export default function App() {
       const clips = current.clips.map((clip) => ({ ...clip }));
       clips[index].joinWithPrevious = joined;
       if (joined) {
-        let previousRoot = index - 1;
-        while (previousRoot > 0 && clips[previousRoot].joinWithPrevious) previousRoot -= 1;
-        const bandName = clips[previousRoot].bandName;
-        clips[index].bandName = bandName;
-        if (clips[index].importError?.startsWith("ファイル名")) clips[index].importError = undefined;
-        for (let cursor = index + 1; cursor < clips.length && clips[cursor].joinWithPrevious; cursor += 1) {
+        let root = index - 1;
+        while (root > 0 && clips[root].joinWithPrevious) root -= 1;
+        const bandName = clips[root].bandName;
+        for (let cursor = index; cursor < clips.length && (cursor === index || clips[cursor].joinWithPrevious); cursor += 1) {
           clips[cursor].bandName = bandName;
           if (clips[cursor].importError?.startsWith("ファイル名")) clips[cursor].importError = undefined;
         }
       }
       return { ...current, clips: renumberClipOrders(clips) };
     });
-    setNotice(joined
-      ? "前の動画と同じバンドの分割パートとして連結します。"
-      : "この動画を別のバンドとして扱います。");
   }
 
+  // ---- サムネイル ----
+
   const loadThumbnailPath = useCallback(async (sourcePath: string) => {
-    setBusy(true);
+    setBusy("写真を読み込んでいます");
     setError(null);
     try {
       const prepared = await invoke<PreparedThumbnail>("prepare_thumbnail", { sourcePath });
-      const thumbnail: ThumbnailV1 = {
-        ...prepared,
-        crop: centeredCropForAspect(prepared.sourceWidth, prepared.sourceHeight),
-        zoom: 1,
-      };
-      updateProject((current) => ({ ...current, thumbnail }));
-      setNotice("集合写真を読み込みました。枠内をドラッグして調整してください。");
+      const thumbnail: ThumbnailV1 = { ...prepared, crop: centeredCropForAspect(prepared.sourceWidth, prepared.sourceHeight), zoom: 1 };
+      updateProject((current) => ({ ...current, thumbnail: { ...thumbnail, outputFormat: current.thumbnail?.outputFormat ?? "jpg" } }));
     } catch (reason) {
       setError(errorMessage(reason));
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   }, [updateProject]);
 
@@ -454,49 +522,55 @@ export default function App() {
     const selection = await open({
       multiple: false,
       directory: false,
-      filters: [{ name: "集合写真", extensions: ["jpg", "jpeg", "png", "heic", "heif", "JPG", "PNG", "HEIC"] }],
+      filters: [{ name: "画像", extensions: THUMBNAIL_EXTENSIONS.flatMap((extension) => [extension, extension.toUpperCase()]) }],
     });
     if (!selection || Array.isArray(selection)) return;
     await loadThumbnailPath(selection);
   }
 
+  function updateThumbnailCrop(area: Area, zoom: number) {
+    const crop = { x: area.x / 100, y: area.y / 100, width: area.width / 100, height: area.height / 100 };
+    updateProject((current) => {
+      if (!current.thumbnail) return current;
+      const previous = current.thumbnail;
+      const unchanged = Math.abs(previous.crop.x - crop.x) < 1e-6 && Math.abs(previous.crop.y - crop.y) < 1e-6
+        && Math.abs(previous.crop.width - crop.width) < 1e-6 && Math.abs(previous.crop.height - crop.height) < 1e-6
+        && Math.abs(previous.zoom - zoom) < 1e-6;
+      return unchanged ? current : { ...current, thumbnail: { ...previous, crop, zoom } };
+    }, "crop");
+  }
+
+  // ---- ドラッグ＆ドロップ ----
+
   const handleDroppedPaths = useCallback(async (paths: string[]) => {
     setFileDragActive(false);
-    if (busy) {
-      setNotice("処理中のため，ファイルを追加できません。");
-      return;
-    }
-    if (step === "import") {
-      const videos = paths.filter(isMp4Path);
-      if (videos.length === 0) {
-        setError("MP4ファイルをドロップしてください。");
-        return;
-      }
-      await addVideoPaths(videos);
-      return;
-    }
+    if (busy || renderJobId) return;
     if (step === "thumbnail") {
       const images = paths.filter(isThumbnailImagePath);
       if (images.length === 0) {
-        setError("JPG，PNG，HEIC，HEIFのいずれかをドロップしてください。");
-        return;
-      }
-      if (images.length > 1) {
-        setError("サムネイル画像は1枚だけドロップしてください。");
+        setError("写真をドロップしてください（JPEG，PNG，HEIC，WebPなど）。");
         return;
       }
       await loadThumbnailPath(images[0]);
+      return;
     }
-  }, [addVideoPaths, busy, loadThumbnailPath, step]);
+    const videos = paths.filter(isVideoPath);
+    const others = paths.filter((path) => !isVideoPath(path) && !isThumbnailImagePath(path));
+    const fromFolders = others.length > 0 ? await listFolders(others) : [];
+    const all = [...videos, ...fromFolders];
+    if (all.length === 0) {
+      setError("使える動画が見つかりませんでした（MP4，MOV，MKV，MTSなど）。");
+      return;
+    }
+    await addVideoPaths(all);
+  }, [addVideoPaths, busy, loadThumbnailPath, renderJobId, step]);
 
   useEffect(() => {
     setFileDragActive(false);
     const unlisten = getCurrentWindow().onDragDropEvent(({ payload }) => {
       if (payload.type === "enter") {
-        const acceptsDrop = step === "import"
-          ? payload.paths.some(isMp4Path)
-          : step === "thumbnail" && payload.paths.some(isThumbnailImagePath);
-        setFileDragActive(!busy && acceptsDrop);
+        const accepts = step === "thumbnail" ? payload.paths.some(isThumbnailImagePath) : payload.paths.length > 0;
+        setFileDragActive(!busy && !renderJobId && accepts);
       } else if (payload.type === "leave") {
         setFileDragActive(false);
       } else if (payload.type === "drop") {
@@ -506,183 +580,191 @@ export default function App() {
     return () => {
       void unlisten.then((remove) => remove());
     };
-  }, [busy, handleDroppedPaths, step]);
+  }, [busy, handleDroppedPaths, renderJobId, step]);
 
-  function updateThumbnailCrop(area: Area, zoom: number) {
-    if (!project.thumbnail) return;
-    const crop = {
-      x: area.x / 100,
-      y: area.y / 100,
-      width: area.width / 100,
-      height: area.height / 100,
-    };
-    updateProject((current) => {
-      if (!current.thumbnail) return current;
-      const previous = current.thumbnail;
-      const unchanged =
-        Math.abs(previous.crop.x - crop.x) < 1e-6 &&
-        Math.abs(previous.crop.y - crop.y) < 1e-6 &&
-        Math.abs(previous.crop.width - crop.width) < 1e-6 &&
-        Math.abs(previous.crop.height - crop.height) < 1e-6 &&
-        Math.abs(previous.zoom - zoom) < 1e-6;
-      return unchanged ? current : { ...current, thumbnail: { ...previous, crop, zoom } };
-    });
-  }
+  // ---- 書き出し ----
 
   async function chooseOutputDirectory() {
-    const folder = await open({ directory: true, multiple: false });
-    if (folder && !Array.isArray(folder)) setOutputDirectory(folder);
+    const folder = await open({ directory: true, multiple: false, defaultPath: outputDirectory || undefined });
+    if (folder && !Array.isArray(folder)) updateProject((current) => ({ ...current, outputDirectory: folder }));
   }
 
   function buildRenderRequest(overwrite: boolean): RenderRequest {
+    const current = projectRef.current;
     return {
-      eventName: safeEventName(project.eventName),
+      eventName: safeEventName(current.eventName),
       outputDirectory,
-      resolution: project.outputResolution,
-      clips: project.clips,
-      thumbnail: project.thumbnail,
+      resolution: current.outputResolution,
+      frameRate: current.outputFrameRate ?? "59.94",
+      clips: current.clips,
+      thumbnail: current.thumbnail,
       overwrite,
     };
+  }
+
+  async function beginRender(overwrite: boolean) {
+    try {
+      const started = await invoke<RenderStarted>("start_render", { request: buildRenderRequest(overwrite) });
+      setRenderJobId(started.jobId);
+      setRenderProgress({ jobId: started.jobId, phase: "preparing", progress: 0, elapsedSeconds: 0, etaSeconds: null, encoder: null, message: "準備しています" });
+    } catch (reason) {
+      setError(errorMessage(reason));
+    }
   }
 
   async function startRender() {
     setError(null);
     setRenderResult(null);
-    if (!project.eventName.trim()) {
-      setError("イベント名を入力してください。");
-      return;
-    }
-    if (!outputDirectory) {
-      setError("保存先フォルダーを選択してください。");
-      return;
-    }
-    if (project.clips.length === 0) {
-      setError("動画を1本以上読み込んでください。");
-      return;
-    }
-    if (project.clips.some((clip) => clip.importError || !clip.media.hasAudio)) {
-      setError("読込エラーまたは音声のない動画があります。動画読込画面で確認してください。");
+    if (issues.length > 0) {
+      setError(issues.map((issue) => issue.text).join("\n"));
       return;
     }
     try {
-      const preliminary = buildRenderRequest(false);
-      const paths = await invoke<OutputPaths>("output_paths", { request: preliminary });
-      let overwrite = false;
+      const paths = await invoke<OutputPaths>("output_paths", { request: buildRenderRequest(false) });
       if (paths.existing.length > 0) {
-        overwrite = window.confirm(
-          `次のファイルが既にあります。上書きしますか？\n\n${paths.existing.join("\n")}`,
-        );
-        if (!overwrite) return;
+        setConfirmation({
+          title: "同じ名前のファイルがあります",
+          body: `${paths.existing.map(basename).join("\n")}\n\n上書きしますか？`,
+          confirmLabel: "上書きして書き出す",
+          danger: true,
+          onConfirm: () => void beginRender(true),
+        });
+        return;
       }
-      const started = await invoke<RenderStarted>("start_render", { request: buildRenderRequest(overwrite) });
-      setRenderJobId(started.jobId);
-      setRenderProgress({
-        jobId: started.jobId,
-        phase: "preparing",
-        progress: 0,
-        elapsedSeconds: 0,
-        etaSeconds: null,
-        encoder: null,
-        message: "書き出しを準備しています。",
-      });
+      await beginRender(false);
     } catch (reason) {
       setError(errorMessage(reason));
     }
   }
 
   async function cancelRender() {
-    if (!renderJobId) return;
-    await invoke("cancel_render", { jobId: renderJobId });
+    if (renderJobId) await invoke("cancel_render", { jobId: renderJobId });
   }
 
-  async function closeDiscardingChanges() {
-    if (closing) return;
-    setClosing(true);
+  async function revealFile(path: string) {
     try {
-      if (renderJobId) await cancelRender();
-      await getCurrentWindow().destroy();
+      await invoke("reveal_in_folder", { path });
     } catch (reason) {
-      setClosing(false);
-      setCloseRequested(false);
-      setError(`アプリを終了できませんでした。\n${errorMessage(reason)}`);
+      setError(errorMessage(reason));
     }
   }
 
-  async function saveAndClose() {
+  // ---- 終了 ----
+
+  const closeWindow = useCallback(async (mode: "save" | "discard") => {
     if (closing) return;
     setClosing(true);
     try {
-      const saved = await saveProject(false);
-      if (!saved) {
+      if (mode === "save" && !(await saveProject(false))) {
         setClosing(false);
         return;
       }
+      if (renderJobId) await invoke("cancel_render", { jobId: renderJobId });
       await getCurrentWindow().destroy();
     } catch (reason) {
       setClosing(false);
       setCloseRequested(false);
-      setError(`アプリを終了できませんでした。\n${errorMessage(reason)}`);
+      setError(`終了できませんでした。\n${errorMessage(reason)}`);
     }
-  }
+  }, [closing, renderJobId, saveProject]);
+
+  useEffect(() => {
+    const unlisten = getCurrentWindow().onCloseRequested((event) => {
+      if (renderJobId) {
+        event.preventDefault();
+        setCloseRequested(true);
+      } else if (dirty && projectPath) {
+        // 保存先が決まっているので，確認せずに保存して閉じる。
+        event.preventDefault();
+        void closeWindow("save");
+      } else if (dirty && projectRef.current.clips.length > 0) {
+        event.preventDefault();
+        setCloseRequested(true);
+      }
+    });
+    return () => {
+      void unlisten.then((remove) => remove());
+    };
+  }, [closeWindow, dirty, projectPath, renderJobId]);
+
+  // ---- キーボードショートカット ----
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      const mod = isMac ? event.metaKey : event.ctrlKey;
+      if (!mod || event.altKey) return;
+      const key = event.key.toLowerCase();
+      if (key === "z" && !event.shiftKey) { event.preventDefault(); undo(); }
+      else if ((key === "z" && event.shiftKey) || (key === "y" && !isMac)) { event.preventDefault(); redo(); }
+      else if (key === "s") { event.preventDefault(); if (!busy) void saveProject(event.shiftKey); }
+      else if (key === "o") { event.preventDefault(); if (!busy && !renderJobId) guardUnsaved(() => void openProject()); }
+      else if (key === "n") { event.preventDefault(); if (!busy && !renderJobId) guardUnsaved(newProject); }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  });
+
+  // ---- 画面 ----
+
+  const importIssues = project.clips.length === 0 ? 0 : issues.filter((issue) => issue.step === "import").length;
+  const saveLabel = saveState === "saving" ? "保存中…" : saveState === "error" ? "保存できませんでした" : dirty ? (projectPath ? "保存待ち" : "未保存") : projectPath ? "保存済み" : "";
+  const locked = Boolean(busy || renderJobId);
 
   return (
     <div className="app-shell">
       <header className="topbar">
         <div className="brand">
-          <div className="brand-mark" aria-hidden="true"><span>▶</span></div>
-          <div>
-            <strong>ARTOFFICE</strong>
-            <small>広報動画作成ソフト</small>
-          </div>
+          <img src={logoUrl} alt="" width={30} height={30} />
+          <span className="project-name" title={projectPath ?? undefined}>
+            {projectPath ? basename(projectPath).replace(/\.aovproj$/i, "") : "新しいプロジェクト"}
+          </span>
+          {saveLabel && <span className={`save-state ${saveState === "error" ? "is-error" : dirty ? "is-dirty" : ""}`}>{saveLabel}</span>}
         </div>
-        <div className="project-title">
-          <span>{projectPath ? basename(projectPath) : "未保存のプロジェクト"}</span>
-          {dirty && <span className="dirty-dot" title="未保存の変更があります">●</span>}
-        </div>
-        <div className="toolbar-actions">
-          <button className="ghost" onClick={openProject} disabled={busy || Boolean(renderJobId)}>開く</button>
-          <button className="ghost" onClick={() => void saveProject(false)} disabled={busy}>保存</button>
-          <button className="ghost" onClick={() => void saveProject(true)} disabled={busy}>名前を付けて保存</button>
+
+        <nav className="steps" aria-label="手順">
+          {STEPS.map((item, index) => (
+            <button
+              key={item.id}
+              className={step === item.id ? "active" : ""}
+              aria-current={step === item.id ? "step" : undefined}
+              onClick={() => setStep(item.id)}
+              disabled={item.id !== "import" && project.clips.length === 0}
+              title={item.id !== "import" && project.clips.length === 0 ? "先に動画を追加してください" : undefined}
+            >
+              <span className="step-index">{index + 1}</span>
+              {item.label}
+              {item.id === "import" && importIssues > 0 && <span className="badge" title="確認が必要な動画があります">{importIssues}</span>}
+            </button>
+          ))}
+        </nav>
+
+        <div className="toolbar">
+          <button className="icon" onClick={undo} disabled={historySize.past === 0} title={`元に戻す（${MOD}Z）`} aria-label="元に戻す"><UndoIcon /></button>
+          <button className="icon" onClick={redo} disabled={historySize.future === 0} title={`やり直す（${isMac ? "⌘⇧Z" : "Ctrl+Y"}）`} aria-label="やり直す"><RedoIcon /></button>
+          <span className="toolbar-sep" />
+          <button className="quiet" onClick={() => guardUnsaved(newProject)} disabled={locked} title={`${MOD}N`}>新規</button>
+          <button className="quiet" onClick={() => guardUnsaved(() => void openProject())} disabled={locked} title={`${MOD}O`}>開く</button>
+          <button className="quiet" onClick={() => void saveProject(false)} disabled={Boolean(busy)} title={`${MOD}S`}>保存</button>
+          <button className="quiet" onClick={() => void saveProject(true)} disabled={Boolean(busy)} title={isMac ? "⌘⇧S" : "Ctrl+Shift+S"}>{isMac ? "別名で保存" : "名前を付けて保存"}</button>
         </div>
       </header>
 
-      <nav className="step-nav" aria-label="編集手順">
-        {STEPS.map((item) => (
-          <button
-            key={item.id}
-            className={step === item.id ? "active" : ""}
-            onClick={() => setStep(item.id)}
-            disabled={item.id !== "import" && project.clips.length === 0}
-          >
-            <span className="step-number">{item.index}</span>
-            <span><strong>{item.label}</strong><small>{item.description}</small></span>
-          </button>
-        ))}
-      </nav>
+      {toolStatus && (!toolStatus.ffmpegPath || !toolStatus.ffprobePath) && (
+        <div className="alert alert-error">動画処理用のファイル（tools フォルダー）が見つかりません。アプリをフォルダーごと展開し直してください。</div>
+      )}
+      {error && (
+        <div className="alert alert-error" role="alert">
+          <pre>{error}</pre>
+          <button className="quiet small" onClick={() => setError(null)}>閉じる</button>
+        </div>
+      )}
 
       <main className="workspace">
-        {toolStatus && (!toolStatus.ffmpegPath || !toolStatus.ffprobePath) && (
-          <div className="banner error-banner">FFmpegまたはFFprobeが見つかりません。vendor-toolsを準備してください。</div>
-        )}
-        {notice && <div className="banner notice-banner"><span>{notice}</span><button onClick={() => setNotice(null)}>閉じる</button></div>}
-        {error && <div className="banner error-banner"><pre>{error}</pre><button onClick={() => setError(null)}>閉じる</button></div>}
-
-        {fileDragActive && (
-          <div className="file-drop-overlay" role="status" aria-live="polite">
-            <div>
-              <span aria-hidden="true">↓</span>
-              <strong>{step === "import" ? "MP4をドロップして追加" : "画像をドロップして設定"}</strong>
-            </div>
-          </div>
-        )}
-
         {step === "import" && (
           <ImportStep
             project={project}
-            busy={busy}
-            duplicateSet={duplicateSet}
-            draggedClipId={draggedClipId}
-            onEventName={(eventName) => updateProject((current) => ({ ...current, eventName }))}
+            busy={locked}
+            onEventName={(eventName) => updateProject((current) => ({ ...current, eventName }), "event")}
             onChooseFiles={chooseVideoFiles}
             onChooseFolder={chooseVideoFolder}
             onRelink={relinkMissingSources}
@@ -690,11 +772,8 @@ export default function App() {
             onRemoveClip={removeClip}
             onSetJoin={setJoinWithPrevious}
             onMoveDirection={moveClipByDirection}
-            onDragStart={setDraggedClipId}
-            onDrop={(sourceId, targetId) => {
-              moveClip(sourceId, targetId);
-              setDraggedClipId(null);
-            }}
+            onMove={moveClip}
+            onEdit={(id) => { setSelectedClipId(id); setStep("trim"); }}
             onNext={() => setStep("trim")}
           />
         )}
@@ -706,16 +785,17 @@ export default function App() {
             onSelect={setSelectedClipId}
             onUpdate={updateClip}
             onNext={() => setStep("thumbnail")}
-            onError={(message) => setError(message)}
+            onError={setError}
           />
         )}
 
         {step === "thumbnail" && (
           <ThumbnailStep
             thumbnail={project.thumbnail}
-            busy={busy}
+            busy={locked}
             onChoose={chooseThumbnail}
             onRemove={() => updateProject((current) => ({ ...current, thumbnail: null }))}
+            onFormat={(outputFormat) => updateProject((current) => ({ ...current, thumbnail: current.thumbnail ? { ...current.thumbnail, outputFormat } : null }))}
             onCropComplete={updateThumbnailCrop}
             onNext={() => setStep("export")}
           />
@@ -724,516 +804,79 @@ export default function App() {
         {step === "export" && (
           <ExportStep
             project={project}
-            durationSeconds={durationSeconds}
             outputDirectory={outputDirectory}
+            issues={issues}
             renderJobId={renderJobId}
             progress={renderProgress}
             result={renderResult}
+            onEventName={(eventName) => updateProject((current) => ({ ...current, eventName }), "event")}
             onResolution={(outputResolution) => updateProject((current) => ({ ...current, outputResolution }))}
+            onFrameRate={(outputFrameRate) => updateProject((current) => ({ ...current, outputFrameRate }))}
             onChooseDirectory={chooseOutputDirectory}
+            onGoToStep={setStep}
             onStart={startRender}
             onCancel={cancelRender}
+            onReveal={revealFile}
+            onToast={showToast}
+            onError={setError}
           />
         )}
       </main>
 
-      {busy && <div className="busy-overlay"><div className="spinner" /><span>処理しています…</span></div>}
+      {fileDragActive && (
+        <div className="drop-overlay" role="status">
+          <strong>{step === "thumbnail" ? "写真をドロップ" : "動画またはフォルダーをドロップ"}</strong>
+        </div>
+      )}
+
+      {busy && (
+        <div className="busy" role="status" aria-live="polite">
+          <div className="spinner" />
+          <span>{busy}</span>
+        </div>
+      )}
+
+      <div className="toasts" aria-live="polite">
+        {toasts.map((toast) => (
+          <div className="toast" key={toast.id}>
+            <span>{toast.text}</span>
+            {toast.action && (
+              <button className="link" onClick={() => { toast.action!.run(); setToasts((current) => current.filter((item) => item.id !== toast.id)); }}>
+                {toast.action.label}
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {confirmation && (
+        <div className="modal-backdrop" role="presentation">
+          <div className="modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+            <h2 id="confirm-title">{confirmation.title}</h2>
+            <p>{confirmation.body}</p>
+            <div className="modal-actions">
+              <button className="secondary" onClick={() => setConfirmation(null)} autoFocus>キャンセル</button>
+              <button className={confirmation.danger ? "danger" : "primary"} onClick={() => { const run = confirmation.onConfirm; setConfirmation(null); run(); }}>
+                {confirmation.confirmLabel}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {closeRequested && (
         <div className="modal-backdrop" role="presentation">
           <div className="modal" role="dialog" aria-modal="true" aria-labelledby="close-title">
-            <h2 id="close-title">アプリを終了しますか？</h2>
-            <p>{renderJobId ? "書き出しをキャンセルして終了します。" : "保存していない変更があります。"}</p>
+            <h2 id="close-title">{renderJobId ? "書き出しを中止して終了しますか？" : "保存してから終了しますか？"}</h2>
+            <p>{renderJobId ? "次に書き出すときは最初からやり直しになります。" : "保存しないと，今の編集内容は失われます。"}</p>
             <div className="modal-actions">
-              {!renderJobId && <button className="primary" onClick={saveAndClose} disabled={closing}>{closing ? "終了処理中…" : "保存して終了"}</button>}
-              <button className="danger" onClick={closeDiscardingChanges} disabled={closing}>{closing ? "終了処理中…" : renderJobId ? "中止して終了" : "破棄して終了"}</button>
-              <button className="ghost" onClick={() => setCloseRequested(false)} disabled={closing}>キャンセル</button>
+              <button className="secondary" onClick={() => setCloseRequested(false)} disabled={closing}>キャンセル</button>
+              <button className="danger" onClick={() => void closeWindow("discard")} disabled={closing}>{renderJobId ? "中止して終了" : "保存しない"}</button>
+              {!renderJobId && <button className="primary" onClick={() => void closeWindow("save")} disabled={closing}>{closing ? "保存中…" : "保存して終了"}</button>}
             </div>
           </div>
         </div>
       )}
     </div>
-  );
-}
-
-interface ImportStepProps {
-  project: ProjectV1;
-  busy: boolean;
-  duplicateSet: Set<number>;
-  draggedClipId: string | null;
-  onEventName: (value: string) => void;
-  onChooseFiles: () => void;
-  onChooseFolder: () => void;
-  onRelink: () => void;
-  onBandName: (id: string, value: string) => void;
-  onRemoveClip: (id: string) => void;
-  onSetJoin: (id: string, joined: boolean) => void;
-  onMoveDirection: (id: string, direction: -1 | 1) => void;
-  onDragStart: (id: string | null) => void;
-  onDrop: (sourceId: string, targetId: string) => void;
-  onNext: () => void;
-}
-
-function ImportStep(props: ImportStepProps) {
-  const hasMissing = props.project.clips.some((clip) => Boolean(clip.importError));
-  const groups = clipGroups(props.project.clips);
-  const pointerDragIdRef = useRef<string | null>(null);
-  const [pointerDropTargetId, setPointerDropTargetId] = useState<string | null>(null);
-  const positions = new Map<string, { groupIndex: number; partIndex: number; partCount: number }>();
-  groups.forEach((group, groupIndex) => group.forEach((clip, partIndex) => {
-    positions.set(clip.id, { groupIndex, partIndex, partCount: group.length });
-  }));
-
-  function clipIdAt(clientX: number, clientY: number): string | null {
-    return document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>("[data-clip-id]")?.dataset.clipId ?? null;
-  }
-
-  function beginPointerDrag(event: ReactPointerEvent<HTMLElement>, id: string) {
-    if (event.button !== 0) return;
-    event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
-    pointerDragIdRef.current = id;
-    setPointerDropTargetId(id);
-    props.onDragStart(id);
-  }
-
-  function movePointerDrag(event: ReactPointerEvent<HTMLElement>) {
-    if (!pointerDragIdRef.current) return;
-    setPointerDropTargetId(clipIdAt(event.clientX, event.clientY));
-  }
-
-  function endPointerDrag(event: ReactPointerEvent<HTMLElement>) {
-    const sourceId = pointerDragIdRef.current;
-    const targetId = clipIdAt(event.clientX, event.clientY);
-    pointerDragIdRef.current = null;
-    setPointerDropTargetId(null);
-    props.onDragStart(null);
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-    if (sourceId && targetId) props.onDrop(sourceId, targetId);
-  }
-
-  function cancelPointerDrag(event: ReactPointerEvent<HTMLElement>) {
-    pointerDragIdRef.current = null;
-    setPointerDropTargetId(null);
-    props.onDragStart(null);
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-  }
-
-  return (
-    <section className="step-panel">
-      <div className="section-heading">
-        <div><span className="eyebrow">STEP 1</span><h1>動画を読み込む</h1></div>
-        <div className="heading-actions">
-          <button className="secondary" onClick={props.onChooseFiles} disabled={props.busy}>MP4を選択</button>
-          <button className="primary" onClick={props.onChooseFolder} disabled={props.busy}>フォルダーを選択</button>
-        </div>
-      </div>
-
-      <label className="field event-name-field">
-        <span>イベント名</span>
-        <input value={props.project.eventName} onChange={(event) => props.onEventName(event.target.value)} />
-      </label>
-
-      {props.project.clips.length === 0 ? (
-        <div className="empty-state">
-          <div className="empty-icon">＋</div>
-          <h2>ライブ動画を追加してください</h2>
-          <p>MP4をここへドラッグ＆ドロップ</p>
-        </div>
-      ) : (
-        <div className="clip-table-wrap">
-          <div className="clip-table-header">
-            <span>{bandCount(props.project.clips)}バンド・動画{props.project.clips.length}本・ハンドルをドラッグして並べ替え</span>
-            {hasMissing && <button className="secondary small" onClick={props.onRelink}>元動画を再リンク</button>}
-          </div>
-          <div className="clip-table">
-            {props.project.clips.map((clip, index) => {
-              const position = positions.get(clip.id)!;
-              const joined = position.partIndex > 0;
-              return (
-              <div
-                key={clip.id}
-                data-clip-id={clip.id}
-                className={`clip-row ${props.draggedClipId === clip.id ? "dragging" : ""} ${pointerDropTargetId === clip.id && props.draggedClipId !== clip.id ? "drop-target" : ""} ${joined ? "continuation" : ""}`}
-              >
-                <span
-                  className="drag-handle"
-                  title="ドラッグして並べ替え"
-                  aria-label={`${clip.bandName}を並べ替え`}
-                  onPointerDown={(event) => beginPointerDrag(event, clip.id)}
-                  onPointerMove={movePointerDrag}
-                  onPointerUp={endPointerDrag}
-                  onPointerCancel={cancelPointerDrag}
-                >⠿</span>
-                <span className={`order-badge ${props.duplicateSet.has(clip.order) ? "warning" : ""}`} title={joined ? `パート${position.partIndex + 1}` : `出演順${clip.order}`}>
-                  {joined ? "↳" : clip.order}
-                </span>
-                <div className="clip-name-cell">
-                  <input
-                    value={clip.bandName}
-                    disabled={joined}
-                    onChange={(event) => props.onBandName(clip.id, event.target.value)}
-                    aria-label={`${index + 1}番目のバンド名`}
-                  />
-                  <small title={clip.sourcePath}>{joined ? `連結パート${position.partIndex + 1}・` : ""}{clip.sourceFileName}</small>
-                </div>
-                <div className="media-summary">
-                  <span>{clip.media.width}×{clip.media.height}</span>
-                  <span>{(clip.media.fps.numerator / clip.media.fps.denominator).toFixed(2)}fps</span>
-                  <span>{formatClock(clip.media.durationSeconds).replace(/\.\d{3}$/, "")}</span>
-                </div>
-                <div className="status-cell">
-                  {clip.importError ? <span className="status error">要確認</span> : clip.media.needsConversion ? <span className="status convert">変換します</span> : <span className="status ready">準備完了</span>}
-                  {(clip.importError || clip.media.conversionReasons.length > 0) && (
-                    <small>{clip.importError ?? clip.media.conversionReasons.join("，")}</small>
-                  )}
-                </div>
-                <div className="join-cell">
-                  {index === 0 ? (
-                    <span>先頭の動画</span>
-                  ) : (
-                    <button
-                      className={joined ? "join-button active" : "join-button"}
-                      onClick={() => props.onSetJoin(clip.id, !joined)}
-                      title={joined ? "この動画を別のバンドに戻す" : "前の動画と同じバンドとして直結する"}
-                    >{joined ? "✓ 前と連結" : "前と連結"}</button>
-                  )}
-                </div>
-                <div className="move-buttons">
-                  <button onClick={() => props.onMoveDirection(clip.id, -1)} disabled={position.groupIndex === 0} aria-label={`${clip.bandName}を上へ移動`}>↑</button>
-                  <button onClick={() => props.onMoveDirection(clip.id, 1)} disabled={position.groupIndex === groups.length - 1} aria-label={`${clip.bandName}を下へ移動`}>↓</button>
-                </div>
-                <button className="icon-button" onClick={() => props.onRemoveClip(clip.id)} aria-label={`${clip.bandName}を削除`}>×</button>
-              </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      <div className="step-footer">
-        <button className="primary" onClick={props.onNext} disabled={props.project.clips.length === 0}>トリミングへ進む <span>→</span></button>
-      </div>
-    </section>
-  );
-}
-
-interface TrimStepProps {
-  clips: ClipV1[];
-  selected: ClipV1;
-  onSelect: (id: string) => void;
-  onUpdate: (id: string, updater: (clip: ClipV1) => ClipV1) => void;
-  onNext: () => void;
-  onError: (message: string) => void;
-}
-
-function TrimStep({ clips, selected, onSelect, onUpdate, onNext, onError }: TrimStepProps) {
-  const playerRef = useRef<HTMLVideoElement>(null);
-  const [currentTime, setCurrentTime] = useState(0);
-  const fps = selected.media.fps;
-  const inSeconds = frameToSeconds(selected.inFrame, fps);
-  const outSeconds = frameToSeconds(selected.outFrameExclusive, fps);
-  const titleTime = currentTime - inSeconds;
-  const titleOpacity = selected.joinWithPrevious || titleTime < 0 || titleTime >= 5 ? 0 : titleTime < 0.5 ? titleTime / 0.5 : titleTime < 4.5 ? 1 : (5 - titleTime) / 0.5;
-  const groups = clipGroups(clips);
-  const positions = new Map<string, { bandIndex: number; partIndex: number; partCount: number }>();
-  groups.forEach((group, bandIndex) => group.forEach((clip, partIndex) => {
-    positions.set(clip.id, { bandIndex, partIndex, partCount: group.length });
-  }));
-  const selectedPosition = positions.get(selected.id)!;
-
-  useEffect(() => {
-    setCurrentTime(inSeconds);
-    if (playerRef.current) playerRef.current.currentTime = inSeconds;
-  }, [selected.id, inSeconds]);
-
-  function seek(seconds: number) {
-    const clamped = Math.min(outSeconds, Math.max(inSeconds, seconds));
-    if (playerRef.current) playerRef.current.currentTime = clamped;
-    setCurrentTime(clamped);
-  }
-
-  function setInFromCurrent() {
-    const frame = Math.min(selected.outFrameExclusive - 1, secondsToFrame(currentTime, fps));
-    onUpdate(selected.id, (clip) => ({ ...clip, inFrame: frame }));
-  }
-
-  function setOutFromCurrent() {
-    const frame = Math.max(selected.inFrame + 1, secondsToFrame(currentTime, fps));
-    onUpdate(selected.id, (clip) => ({ ...clip, outFrameExclusive: Math.min(frame, clip.media.frameCount) }));
-  }
-
-  return (
-    <section className="editor-layout">
-      <aside className="clip-sidebar">
-        <div className="sidebar-title"><span>{bandCount(clips)}バンド・動画{clips.length}本</span><strong>{clips.length}</strong></div>
-        {clips.map((clip) => {
-          const position = positions.get(clip.id)!;
-          return (
-          <button key={clip.id} className={clip.id === selected.id ? "selected" : ""} onClick={() => onSelect(clip.id)}>
-            <span>{position.partCount > 1 ? `${position.bandIndex + 1}.${position.partIndex + 1}` : position.bandIndex + 1}</span>
-            <div><strong>{clip.bandName}{position.partCount > 1 ? `・パート${position.partIndex + 1}` : ""}</strong><small>{formatClock(clipDurationSeconds(clip)).replace(/\.\d{3}$/, "")}</small></div>
-          </button>
-          );
-        })}
-      </aside>
-
-      <div className="trim-workspace">
-        <div className="section-heading compact">
-          <div><span className="eyebrow">STEP 2</span><h1>{selected.bandName}{selectedPosition.partCount > 1 ? `・パート${selectedPosition.partIndex + 1}` : ""}</h1></div>
-          <span className="clip-counter">{clips.findIndex((clip) => clip.id === selected.id) + 1} / {clips.length}</span>
-        </div>
-
-        <div className="video-stage">
-          <video
-            key={selected.sourcePath}
-            ref={playerRef}
-            src={convertFileSrc(selected.sourcePath)}
-            controls
-            preload="metadata"
-            onLoadedMetadata={() => seek(inSeconds)}
-            onTimeUpdate={(event) => {
-              const video = event.currentTarget;
-              setCurrentTime(video.currentTime);
-              if (video.currentTime >= outSeconds) {
-                video.pause();
-                video.currentTime = outSeconds;
-              }
-            }}
-          />
-          <div className="band-title-preview" style={{ opacity: Math.max(0, Math.min(1, titleOpacity)) }}>{selected.bandName}</div>
-        </div>
-
-        <div className="timeline-card">
-          <div className="timeline-labels"><span>開始 {formatClock(inSeconds)}</span><strong>{formatClock(currentTime)}</strong><span>終了 {formatClock(outSeconds)}</span></div>
-          <div className="dual-range">
-            <div className="range-fill" style={{ left: `${(selected.inFrame / selected.media.frameCount) * 100}%`, right: `${100 - (selected.outFrameExclusive / selected.media.frameCount) * 100}%` }} />
-            <input
-              type="range"
-              min={0}
-              max={Math.max(1, selected.media.frameCount - 1)}
-              value={selected.inFrame}
-              onChange={(event) => onUpdate(selected.id, (clip) => ({ ...clip, inFrame: Math.min(Number(event.target.value), clip.outFrameExclusive - 1) }))}
-              aria-label="開始フレーム"
-            />
-            <input
-              type="range"
-              min={1}
-              max={selected.media.frameCount}
-              value={selected.outFrameExclusive}
-              onChange={(event) => onUpdate(selected.id, (clip) => ({ ...clip, outFrameExclusive: Math.max(Number(event.target.value), clip.inFrame + 1) }))}
-              aria-label="終了フレーム"
-            />
-          </div>
-
-          <div className="trim-controls">
-            <div className="mark-control">
-              <label>開始点</label>
-              <input
-                key={`in-${selected.id}-${selected.inFrame}`}
-                defaultValue={formatClock(inSeconds)}
-                onBlur={(event) => {
-                  const seconds = parseClock(event.target.value);
-                  if (seconds === null) return onError("開始点はH:MM:SS.mmm形式で入力してください。");
-                  onUpdate(selected.id, (clip) => ({ ...clip, inFrame: Math.min(secondsToFrame(seconds, fps), clip.outFrameExclusive - 1) }));
-                }}
-              />
-              <button className="secondary" onClick={setInFromCurrent}>現在位置を設定</button>
-            </div>
-            <div className="frame-controls">
-              <button onClick={() => seek(currentTime - 1 / (fps.numerator / fps.denominator))}>−1フレーム</button>
-              <button onClick={() => seek(inSeconds)}>開始へ</button>
-              <button onClick={() => seek(Math.max(inSeconds, outSeconds - 3))}>終了前を確認</button>
-              <button onClick={() => seek(currentTime + 1 / (fps.numerator / fps.denominator))}>＋1フレーム</button>
-            </div>
-            <div className="mark-control end">
-              <label>終了点</label>
-              <input
-                key={`out-${selected.id}-${selected.outFrameExclusive}`}
-                defaultValue={formatClock(outSeconds)}
-                onBlur={(event) => {
-                  const seconds = parseClock(event.target.value);
-                  if (seconds === null) return onError("終了点はH:MM:SS.mmm形式で入力してください。");
-                  onUpdate(selected.id, (clip) => ({ ...clip, outFrameExclusive: Math.max(secondsToFrame(seconds, fps), clip.inFrame + 1) }));
-                }}
-              />
-              <button className="secondary" onClick={setOutFromCurrent}>現在位置を設定</button>
-            </div>
-          </div>
-        </div>
-
-        <div className="step-footer"><button className="primary" onClick={onNext}>サムネイルへ進む <span>→</span></button></div>
-      </div>
-    </section>
-  );
-}
-
-interface ThumbnailStepProps {
-  thumbnail: ThumbnailV1 | null;
-  busy: boolean;
-  onChoose: () => void;
-  onRemove: () => void;
-  onCropComplete: (area: Area, zoom: number) => void;
-  onNext: () => void;
-}
-
-function ThumbnailStep({ thumbnail, busy, onChoose, onRemove, onCropComplete, onNext }: ThumbnailStepProps) {
-  const [crop, setCrop] = useState({ x: 0, y: 0 });
-  const [zoom, setZoom] = useState(thumbnail?.zoom ?? 1);
-  const initialCroppedArea = useMemo<Area | undefined>(() => thumbnail ? {
-    x: thumbnail.crop.x * 100,
-    y: thumbnail.crop.y * 100,
-    width: thumbnail.crop.width * 100,
-    height: thumbnail.crop.height * 100,
-  } : undefined, [thumbnail?.sourcePath]);
-  const croppedAreaRef = useRef<Area | null>(initialCroppedArea ?? null);
-
-  useEffect(() => {
-    setCrop({ x: 0, y: 0 });
-    setZoom(thumbnail?.zoom ?? 1);
-    croppedAreaRef.current = initialCroppedArea ?? null;
-  }, [thumbnail?.sourcePath, initialCroppedArea]);
-
-  const handleCropChange = useCallback((next: Point) => {
-    setCrop((current) =>
-      Math.abs(current.x - next.x) < 1e-6 && Math.abs(current.y - next.y) < 1e-6 ? current : next,
-    );
-  }, []);
-
-  const handleZoomChange = useCallback((next: number) => {
-    setZoom((current) => Math.abs(current - next) < 1e-6 ? current : next);
-  }, []);
-
-  const rememberCrop = useCallback((area: Area) => {
-    croppedAreaRef.current = area;
-  }, []);
-
-  const commitCrop = useCallback(() => {
-    if (croppedAreaRef.current) onCropComplete(croppedAreaRef.current, zoom);
-  }, [onCropComplete, zoom]);
-
-  return (
-    <section className="step-panel">
-      <div className="section-heading">
-        <div><span className="eyebrow">STEP 3</span><h1>サムネイルを切り抜く</h1></div>
-        <div className="heading-actions"><button className="primary" onClick={onChoose} disabled={busy}>集合写真を選択</button></div>
-      </div>
-
-      {!thumbnail ? (
-        <div className="empty-state thumbnail-empty">
-          <div className="empty-icon photo">▧</div><strong className="drop-prompt">画像をここへドラッグ＆ドロップ</strong><p>JPG，PNG，HEIC，HEIFに対応します。選択しない場合，サムネイルは出力しません。</p>
-          <button className="secondary" onClick={onChoose} disabled={busy}>{busy ? "画像を処理中…" : "写真を選択"}</button>
-        </div>
-      ) : (
-        <div className="thumbnail-editor">
-          <div className="crop-stage">
-            <Cropper
-              image={convertFileSrc(thumbnail.previewPath)}
-              crop={crop}
-              zoom={zoom}
-              aspect={16 / 9}
-              showGrid
-              initialCroppedAreaPercentages={initialCroppedArea}
-              onCropChange={handleCropChange}
-              onZoomChange={handleZoomChange}
-              onCropComplete={rememberCrop}
-              onCropAreaChange={rememberCrop}
-              onInteractionEnd={commitCrop}
-            />
-          </div>
-          <aside className="crop-settings">
-            <h2>切り抜き設定</h2>
-            <div className="source-card"><span>元画像</span><strong title={thumbnail.sourcePath}>{basename(thumbnail.sourcePath)}</strong><small>{thumbnail.sourceWidth}×{thumbnail.sourceHeight}</small></div>
-            <label className="field"><span>拡大率</span><input type="range" min={1} max={4} step={0.01} value={zoom} onChange={(event) => handleZoomChange(Number(event.target.value))} onPointerUp={commitCrop} onKeyUp={commitCrop} onBlur={commitCrop} /><small>{zoom.toFixed(2)}倍</small></label>
-            <p className="hint">写真をドラッグして全員が枠内に入るよう調整します。出力時に高品質補間を行います。</p>
-            <button className="danger text" onClick={onRemove}>集合写真を削除</button>
-          </aside>
-        </div>
-      )}
-
-      <div className="step-footer"><button className="primary" onClick={onNext}>書き出しへ進む <span>→</span></button></div>
-    </section>
-  );
-}
-
-interface ExportStepProps {
-  project: ProjectV1;
-  durationSeconds: number;
-  outputDirectory: string;
-  renderJobId: string | null;
-  progress: RenderProgress | null;
-  result: RenderFinished | null;
-  onResolution: (value: Resolution) => void;
-  onChooseDirectory: () => void;
-  onStart: () => void;
-  onCancel: () => void;
-}
-
-function ExportStep(props: ExportStepProps) {
-  const warnings = chapterWarnings(props.project.clips);
-  const rows = chapterRows(props.project.clips);
-  const estimatedBytes = estimateOutputBytes(props.durationSeconds, props.project.outputResolution);
-  const progressPercent = Math.round((props.progress?.progress ?? 0) * 100);
-
-  return (
-    <section className="step-panel export-panel">
-      <div className="section-heading"><div><span className="eyebrow">STEP 4</span><h1>完成動画を書き出す</h1></div></div>
-      <div className="export-grid">
-        <div className="export-settings">
-          <div className="settings-card">
-            <h2>解像度</h2>
-            <div className="resolution-options">
-              {(["1080p", "1440p"] as Resolution[]).map((resolution) => (
-                <button key={resolution} className={props.project.outputResolution === resolution ? "selected" : ""} onClick={() => props.onResolution(resolution)} disabled={Boolean(props.renderJobId)}>
-                  <strong>{resolution}</strong><span>{resolution === "1080p" ? "1920×1080・15Mbps" : "2560×1440・30Mbps"}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="settings-card">
-            <h2>保存先</h2>
-            <div className="folder-picker"><input readOnly value={props.outputDirectory} placeholder="保存先フォルダーを選択" /><button className="secondary" onClick={props.onChooseDirectory} disabled={Boolean(props.renderJobId)}>選択</button></div>
-            <ul className="output-file-list">
-              <li><span>動画</span><code>{safeEventName(props.project.eventName)}.mp4</code></li>
-              <li><span>チャプター</span><code>{safeEventName(props.project.eventName)}_チャプター.txt</code></li>
-              {props.project.thumbnail && <li><span>サムネイル</span><code>{safeEventName(props.project.eventName)}_サムネイル.jpg</code></li>}
-            </ul>
-          </div>
-          <div className="settings-card summary-stats">
-            <div><span>バンド数</span><strong>{bandCount(props.project.clips)}</strong></div>
-            <div><span>完成時間</span><strong>{formatChapterTime(props.durationSeconds)}</strong></div>
-            <div><span>推定容量</span><strong>{formatBytes(estimatedBytes)}</strong></div>
-            <div><span>音声</span><strong>AAC 384kbps</strong></div>
-          </div>
-        </div>
-
-        <aside className="chapter-preview">
-          <div className="chapter-header"><h2>チャプタープレビュー</h2></div>
-          <pre>{rows.map((row) => `${formatChapterTime(row.seconds)} ${row.text}`).join("\r\n") || "動画を読み込んでください"}</pre>
-          {warnings.map((warning) => <p className="warning-text" key={warning}>⚠ {warning}</p>)}
-        </aside>
-      </div>
-
-      {props.renderJobId && props.progress && (
-        <div className="render-card">
-          <div className="render-status"><div><strong>{props.progress.message}</strong><small>{props.progress.encoder ? `使用エンコーダー: ${props.progress.encoder}` : "GPUを確認しています"}</small></div><strong>{progressPercent}%</strong></div>
-          <div className="progress-track"><div style={{ width: `${progressPercent}%` }} /></div>
-          <div className="render-meta"><span>経過 {formatChapterTime(props.progress.elapsedSeconds)}</span><span>残り {props.progress.etaSeconds == null ? "計算中" : formatChapterTime(props.progress.etaSeconds)}</span></div>
-          <button className="danger" onClick={props.onCancel}>書き出しをキャンセル</button>
-        </div>
-      )}
-
-      {props.result?.status === "completed" && props.result.outputPaths && (
-        <div className="success-card"><strong>✓ 書き出し完了</strong><span>{props.result.outputPaths.video}</span></div>
-      )}
-
-      <div className="step-footer export-footer">
-        <button className="primary large" onClick={props.onStart} disabled={Boolean(props.renderJobId)}>書き出しを開始</button>
-      </div>
-    </section>
   );
 }

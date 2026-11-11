@@ -1,0 +1,20 @@
+{
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg"],
+    "icon": ["icons/icon.icns"],
+    "externalBin": ["binaries/ffmpeg", "binaries/ffprobe"],
+    "resources": {
+      "../vendor-tools/resources/fonts/": "fonts/",
+      "../vendor-tools/licenses/": "licenses/",
+      "../tools.macos.lock.json": "tools.macos.lock.json",
+      "../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
+      "../docs/USER_GUIDE_JA.md": "USER_GUIDE_JA.md",
+      "../docs/MAC_TEST_CHECKLIST.md": "MAC_TEST_CHECKLIST.md"
+    },
+    "macOS": {
+      "minimumSystemVersion": "15.0",
+      "hardenedRuntime": true
+    }
+  }
+}

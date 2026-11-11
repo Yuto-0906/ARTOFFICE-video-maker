@@ -1,5 +1,8 @@
+#[cfg(target_os = "macos")]
+mod macos_image;
 mod media;
 mod models;
+mod preview;
 mod project;
 mod render;
 mod thumbnail;
@@ -16,14 +19,37 @@ fn command_error(error: anyhow::Error) -> String {
     format!("{error:#}")
 }
 
+/// Used by CI to exercise a relocated distribution without starting the WebView.
+pub fn verify_runtime(directory: &std::path::Path) -> anyhow::Result<()> {
+    tokio::runtime::Runtime::new()?.block_on(render::verify_packaged_runtime(directory))
+}
+
 #[tauri::command]
 fn tool_status() -> ToolStatus {
     tools::status()
 }
 
 #[tauri::command]
-fn list_mp4_files(folder: String) -> Result<Vec<String>, String> {
-    media::mp4_files(&folder).map_err(command_error)
+fn list_video_files(folder: String) -> Result<Vec<String>, String> {
+    media::video_files(&folder).map_err(command_error)
+}
+
+#[tauri::command]
+async fn prepare_video_preview(
+    source_path: String,
+    seconds: f64,
+    client_id: String,
+    generation: u64,
+) -> Result<preview::PreparedPreview, String> {
+    let cancellation = preview::begin(client_id, generation).map_err(command_error)?;
+    preview::prepare(&source_path, seconds, &cancellation)
+        .await
+        .map_err(command_error)
+}
+
+#[tauri::command]
+fn cancel_video_preview(client_id: String, generation: u64) {
+    preview::cancel(client_id, generation);
 }
 
 #[tauri::command]
@@ -69,13 +95,43 @@ async fn cancel_render(state: State<'_, RenderState>, job_id: String) -> Result<
     Ok(state.cancel(&job_id).await)
 }
 
+/// 完成ファイルをエクスプローラー／Finderで選択した状態で表示する。
+#[tauri::command]
+fn reveal_in_folder(path: String) -> Result<(), String> {
+    let target = std::path::Path::new(&path);
+    if !target.exists() {
+        return Err("ファイルが見つかりません。移動または削除された可能性があります。".to_string());
+    }
+    #[cfg(target_os = "windows")]
+    let result = {
+        use std::os::windows::process::CommandExt;
+        std::process::Command::new("explorer.exe")
+            .raw_arg(format!("/select,\"{}\"", path))
+            .spawn()
+    };
+    #[cfg(target_os = "macos")]
+    let result = std::process::Command::new("open")
+        .arg("-R")
+        .arg(&path)
+        .spawn();
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let result = std::process::Command::new("xdg-open")
+        .arg(target.parent().unwrap_or(target))
+        .spawn();
+    result
+        .map(|_| ())
+        .map_err(|error| format!("フォルダーを開けませんでした。{error}"))
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_log::Builder::new().build())
         .manage(RenderState::default())
         .setup(|app| {
+            tools::initialize_resource_directory(app.path().resource_dir()?);
             thumbnail::cleanup_cache();
+            preview::cleanup_cache();
             render::cleanup_cache();
             let window = app
                 .get_webview_window("main")
@@ -85,7 +141,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             tool_status,
-            list_mp4_files,
+            list_video_files,
+            prepare_video_preview,
+            cancel_video_preview,
             probe_media,
             read_project,
             write_project,
@@ -93,6 +151,7 @@ pub fn run() {
             output_paths,
             start_render,
             cancel_render,
+            reveal_in_folder,
         ])
         .run(tauri::generate_context!())
         .expect("ARTOFFICE広報動画作成ソフトを起動できませんでした");

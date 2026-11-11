@@ -1,0 +1,18 @@
+FFmpegKit for iOS and macOS
+
+Upstream source and build instructions:
+https://github.com/jaywcjlove/ffmpeg-kit/tree/0bd85df8f9693061f6f979414662baaf876a3e20
+
+License: GNU Lesser General Public License, version 3.
+The license texts are included as FFmpegKit-LICENSE.txt and
+FFmpeg-GPL-3.0.txt.
+
+Build-time modifications by the ARTOFFICE project, 2026-11-11:
+Some prebuilt libraries bind public CoreMedia C functions to the Swift
+CoreMedia overlay. The application build corrects both runtime-relative
+and absolute references to use the public CoreMedia framework, then
+re-signs the frameworks. Codec source code is not modified.
+
+Reproduction script and application source:
+https://github.com/Yuto-0906/ARTOFFICE-video-maker/tree/codex/ios-native
+scripts/ios/fix-coremedia-linkage.sh

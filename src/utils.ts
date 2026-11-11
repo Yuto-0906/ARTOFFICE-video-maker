@@ -3,12 +3,19 @@ import type { ClipV1, ParsedFileName, ProjectV1, Rational } from "./types";
 export const OUTPUT_FPS: Rational = { numerator: 60000, denominator: 1001 };
 export const TRANSITION_SECONDS = 0.5;
 
-export function isMp4Path(path: string): boolean {
-  return /\.mp4$/i.test(path);
+export const VIDEO_EXTENSIONS = ["mp4", "mkv", "mov", "webm", "mts", "m2ts", "avi", "wmv"];
+export const THUMBNAIL_EXTENSIONS = ["jpg", "jpeg", "png", "heic", "heif", "webp", "tif", "tiff", "bmp", "avif", "gif"];
+
+function hasExtension(path: string, extensions: string[]): boolean {
+  return extensions.includes(path.split(/[\\/]/).pop()?.split(".").slice(1).pop()?.toLowerCase() ?? "");
+}
+
+export function isVideoPath(path: string): boolean {
+  return hasExtension(path, VIDEO_EXTENSIONS);
 }
 
 export function isThumbnailImagePath(path: string): boolean {
-  return /\.(?:jpe?g|png|heic|heif)$/i.test(path);
+  return hasExtension(path, THUMBNAIL_EXTENSIONS);
 }
 
 export function centeredCropForAspect(width: number, height: number, aspect = 16 / 9) {
@@ -34,6 +41,20 @@ export function parseVideoFileName(fileName: string): ParsedFileName | null {
   const order = Number(orderText);
   if (!Number.isSafeInteger(order) || order < 1) return null;
   return { order, bandName };
+}
+
+/**
+ * 「01 バンド名」「1-バンド名」など，アンダースコア以外の区切りも受け付ける。
+ * 番号が無い場合はファイル名をそのままバンド名にする。
+ */
+export function guessOrderAndBandName(fileName: string): { order: number | null; bandName: string } {
+  const strict = parseVideoFileName(fileName);
+  if (strict) return strict;
+  const stem = fileName.replace(/\.[^.]+$/, "").trim();
+  const match = stem.match(/^(\d{1,4})[\s_\-.．、・]+(.+)$/);
+  const order = match ? Number(match[1]) : NaN;
+  if (match && order >= 1 && match[2].trim()) return { order, bandName: match[2].trim() };
+  return { order: null, bandName: stem };
 }
 
 export function sortClipsByOrder<T extends Pick<ClipV1, "order" | "bandName">>(clips: T[]): T[] {
@@ -144,8 +165,8 @@ export function parseClock(value: string): number | null {
   return Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]) + milliseconds / 1000;
 }
 
-export function estimateOutputBytes(durationSeconds: number, resolution: "1080p" | "1440p"): number {
-  const videoMbps = resolution === "1080p" ? 15 : 30;
+export function estimateOutputBytes(durationSeconds: number, resolution: "source" | "1080p" | "1440p", source?: { width: number; height: number }): number {
+  const videoMbps = resolution === "source" ? Math.min(80, Math.max(4, 15 * (source?.width ?? 1920) * (source?.height ?? 1080) / (1920 * 1080))) : resolution === "1080p" ? 15 : 30;
   const totalMbps = videoMbps + 0.384;
   return (durationSeconds * totalMbps * 1_000_000) / 8;
 }
@@ -165,11 +186,11 @@ export function formatBytes(bytes: number): string {
 export function chapterWarnings(clips: ClipV1[]): string[] {
   const warnings: string[] = [];
   const groups = clipGroups(clips);
-  if (groups.length > 0 && groups.length < 3) warnings.push("YouTubeのチャプター表示には3件以上の時刻が必要です。");
+  if (groups.length > 0 && groups.length < 3) warnings.push("YouTubeのチャプターは3つ以上ないと表示されません。");
   groups.forEach((group) => {
     const duration = group.reduce((sum, clip) => sum + clipDurationSeconds(clip), 0);
     if (duration < 10) {
-      warnings.push(`${group[0].bandName}は10秒未満のため，YouTubeでチャプターとして認識されない可能性があります。`);
+      warnings.push(`${group[0].bandName}：10秒未満のため，YouTubeではチャプターになりません。`);
     }
   });
   return warnings;
@@ -180,16 +201,34 @@ export function validateProject(value: unknown): value is ProjectV1 {
   const project = value as Partial<ProjectV1>;
   return (
     project.schemaVersion === 1 &&
-    (project.appVersion === "0.1.0" || project.appVersion === "0.2.0" || project.appVersion === "0.2.1" || project.appVersion === "0.3.0") &&
+    (project.appVersion === "0.1.0" || project.appVersion === "0.2.0" || project.appVersion === "0.2.1" || project.appVersion === "0.3.0" || project.appVersion === "0.4.0") &&
     typeof project.eventName === "string" &&
     Array.isArray(project.clips) &&
-    (project.outputResolution === "1080p" || project.outputResolution === "1440p") &&
+    (project.outputResolution === "source" || project.outputResolution === "1080p" || project.outputResolution === "1440p") &&
+    (project.outputFrameRate === undefined || ["source", "23.976", "24", "25", "29.97", "30", "50", "59.94", "60"].includes(project.outputFrameRate)) &&
+    (project.outputDirectory === undefined || typeof project.outputDirectory === "string") &&
     project.transitionMs === 500
   );
 }
 
 export function basename(path: string): string {
   return path.replace(/\\/g, "/").split("/").pop() ?? path;
+}
+
+export function parentDirectory(path: string): string {
+  const index = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  return index > 0 ? path.slice(0, index) : "";
+}
+
+/** 時間軸の目盛り間隔（秒）。幅に対しておおよそ maxTicks 本以内に収める。 */
+export function rulerStep(durationSeconds: number, maxTicks = 8): number {
+  const steps = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
+  return steps.find((step) => durationSeconds / step <= maxTicks) ?? 7200;
+}
+
+/** 書き出しを止める読込エラーか。旧版で付けたファイル名の注意は対象外。 */
+export function isBlockingImportError(clip: Pick<ClipV1, "importError">): boolean {
+  return Boolean(clip.importError) && !clip.importError!.startsWith("ファイル名");
 }
 
 export function parentFolderName(path: string): string {

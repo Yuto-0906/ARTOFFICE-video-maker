@@ -40,8 +40,10 @@ mod tests {
             event_name: "8月ライブ".to_string(),
             clips: Vec::new(),
             output_resolution: Resolution::P1080,
+            output_frame_rate: crate::models::FrameRate::default(),
             transition_ms: 500,
             thumbnail: None,
+            output_directory: None,
         };
         write(path.to_str().unwrap(), &project).unwrap();
         let loaded = read(path.to_str().unwrap()).unwrap();

@@ -1,6 +1,6 @@
 use std::{
     fs::{self, File},
-    io::{BufReader, BufWriter},
+    io::{BufReader, BufWriter, Write},
     path::{Path, PathBuf},
 };
 
@@ -9,13 +9,13 @@ use exif::{In, Reader as ExifReader, Tag};
 use image::{
     codecs::jpeg::JpegEncoder, imageops::FilterType, DynamicImage, GenericImageView, ImageReader,
 };
+#[cfg(not(target_os = "macos"))]
 use tokio::process::Command;
 use uuid::Uuid;
 
-use crate::{
-    models::{CropRectNormalized, PreparedThumbnail, ThumbnailV1},
-    tools,
-};
+use crate::models::{CropRectNormalized, PreparedThumbnail, ThumbnailFormat, ThumbnailV1};
+#[cfg(not(target_os = "macos"))]
+use crate::tools;
 
 const PREVIEW_MAX_DIMENSION: u32 = 1920;
 const PREVIEW_JPEG_QUALITY: u8 = 90;
@@ -27,17 +27,18 @@ fn cache_directory() -> Result<PathBuf> {
         .join("thumbnail-previews");
     #[cfg(not(test))]
     let root = dirs::cache_dir()
-        .context("Windowsのキャッシュフォルダーが見つかりません。")?
+        .context("キャッシュフォルダーが見つかりません。")?
         .join("ARTOFFICE-video-maker")
         .join("thumbnail-previews");
     fs::create_dir_all(&root).context("サムネイル用キャッシュを作成できませんでした。")?;
     Ok(root)
 }
 
-fn is_heic(path: &Path) -> bool {
+fn needs_system_decoder(path: &Path) -> bool {
     path.extension().is_some_and(|extension| {
         extension.to_string_lossy().eq_ignore_ascii_case("heic")
             || extension.to_string_lossy().eq_ignore_ascii_case("heif")
+            || extension.to_string_lossy().eq_ignore_ascii_case("avif")
     })
 }
 
@@ -78,31 +79,57 @@ fn decode_standard(path: &Path) -> Result<(DynamicImage, u32)> {
     Ok((apply_orientation(image, orientation), orientation))
 }
 
-async fn decode_heic(path: &Path) -> Result<(DynamicImage, PathBuf)> {
-    let magick = tools::magick()
-        .context("HEICデコーダーが見つかりません。vendor-tools/imagemagickを準備してください。")?;
+// AVIF and HEIF use the bundled decoder on Windows and ImageIO on macOS.
+async fn decode_container(path: &Path) -> Result<DynamicImage> {
     let decoded = cache_directory()?.join(format!("decoded-{}.png", Uuid::new_v4()));
-    let primary_image = format!("{}[0]", path.to_string_lossy());
-    let mut command = Command::new(magick);
-    tools::hide_console(&mut command);
-    let output = command
-        .arg(primary_image)
-        .arg("-auto-orient")
-        .arg("-strip")
-        .arg(&decoded)
-        .output()
-        .await
-        .context("HEICデコーダーを起動できませんでした。")?;
-    anyhow::ensure!(
-        output.status.success(),
-        "HEIC画像を読み取れませんでした: {}",
-        String::from_utf8_lossy(&output.stderr).trim()
-    );
-    let image = ImageReader::open(&decoded)
-        .context("変換したHEIC画像を開けませんでした。")?
-        .decode()
-        .context("変換したHEIC画像を読み取れませんでした。")?;
-    Ok((image, decoded))
+    let result = async {
+        #[cfg(target_os = "macos")]
+        {
+            let source = path.to_path_buf();
+            let destination = decoded.clone();
+            tokio::task::spawn_blocking(move || {
+                crate::macos_image::decode_to_png(&source, &destination)
+            })
+            .await
+            .context("画像の読み込み処理が異常終了しました。")??;
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let magick = tools::magick().context("画像デコーダーが見つかりません。")?;
+            let mut command = Command::new(magick);
+            tools::hide_console(&mut command);
+            let output = command
+                .arg(format!("{}[0]", path.to_string_lossy()))
+                .args(["-auto-orient", "-strip"])
+                .arg(&decoded)
+                .output()
+                .await
+                .context("画像デコーダーを起動できませんでした。")?;
+            anyhow::ensure!(
+                output.status.success(),
+                "画像を読み取れませんでした: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        ImageReader::open(&decoded)
+            .context("変換した画像を開けませんでした。")?
+            .decode()
+            .context("変換した画像を読み取れませんでした。")
+    }
+    .await;
+    let _ = fs::remove_file(decoded);
+    result
+}
+
+async fn decode_source(path: &Path) -> Result<(DynamicImage, u32)> {
+    if needs_system_decoder(path) {
+        Ok((decode_container(path).await?, 1))
+    } else {
+        let source = path.to_path_buf();
+        tokio::task::spawn_blocking(move || decode_standard(&source))
+            .await
+            .context("画像の読み込み処理が異常終了しました。")?
+    }
 }
 
 fn save_preview(image: DynamicImage, preview_path: &Path) -> Result<()> {
@@ -127,20 +154,11 @@ fn save_preview(image: DynamicImage, preview_path: &Path) -> Result<()> {
 pub async fn prepare(source_path: &str) -> Result<PreparedThumbnail> {
     let source = Path::new(source_path);
     anyhow::ensure!(source.is_file(), "集合写真が見つかりません。");
-    let (image, orientation, decoded_temp) = if is_heic(source) {
-        let (image, temporary) = decode_heic(source).await?;
-        (image, 1, Some(temporary))
-    } else {
-        let (image, orientation) = decode_standard(source)?;
-        (image, orientation, None)
-    };
+    let (image, orientation) = decode_source(source).await?;
     let (source_width, source_height) = image.dimensions();
     let preview_path = cache_directory()?.join(format!("preview-{}.jpg", Uuid::new_v4()));
     let task_path = preview_path.clone();
     let preview_result = tokio::task::spawn_blocking(move || save_preview(image, &task_path)).await;
-    if let Some(temporary) = decoded_temp {
-        let _ = fs::remove_file(temporary);
-    }
     preview_result.context("サムネイルのプレビュー処理が異常終了しました。")??;
     Ok(PreparedThumbnail {
         source_path: source_path.to_string(),
@@ -151,7 +169,12 @@ pub async fn prepare(source_path: &str) -> Result<PreparedThumbnail> {
     })
 }
 
-fn export_decoded(image: DynamicImage, crop: CropRectNormalized, destination: &Path) -> Result<()> {
+fn export_decoded(
+    image: DynamicImage,
+    crop: CropRectNormalized,
+    format: ThumbnailFormat,
+    destination: &Path,
+) -> Result<()> {
     let (image_width, image_height) = image.dimensions();
     anyhow::ensure!(
         crop.x.is_finite()
@@ -193,30 +216,32 @@ fn export_decoded(image: DynamicImage, crop: CropRectNormalized, destination: &P
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent).context("サムネイルの保存先を作成できませんでした。")?;
     }
-    let file = File::create(destination).context("サムネイルJPEGを作成できませんでした。")?;
-    let mut encoder = JpegEncoder::new_with_quality(BufWriter::new(file), 92);
-    encoder
-        .encode_image(&resized)
-        .context("サムネイルJPEGを保存できませんでした。")?;
+    let file = File::create(destination).context("サムネイルを作成できませんでした。")?;
+    let mut writer = BufWriter::new(file);
+    match format {
+        ThumbnailFormat::Jpg => JpegEncoder::new_with_quality(&mut writer, 92)
+            .encode_image(&resized)
+            .context("サムネイルを保存できませんでした。")?,
+        ThumbnailFormat::Png => DynamicImage::ImageRgb8(resized)
+            .write_to(&mut writer, image::ImageFormat::Png)
+            .context("サムネイルを保存できませんでした。")?,
+    }
+    writer
+        .flush()
+        .context("サムネイルを保存できませんでした。")?;
     Ok(())
 }
 
 pub async fn export(thumbnail: &ThumbnailV1, destination: &Path) -> Result<()> {
     let source = Path::new(&thumbnail.source_path);
     anyhow::ensure!(source.is_file(), "サムネイルの元画像が見つかりません。");
-    let (image, decoded_temp) = if is_heic(source) {
-        let (image, temporary) = decode_heic(source).await?;
-        (image, Some(temporary))
-    } else {
-        (decode_standard(source)?.0, None)
-    };
+    let (image, _) = decode_source(source).await?;
     let crop = thumbnail.crop;
+    let format = thumbnail.output_format;
     let destination = destination.to_path_buf();
     let export_result =
-        tokio::task::spawn_blocking(move || export_decoded(image, crop, &destination)).await;
-    if let Some(temporary) = decoded_temp {
-        let _ = fs::remove_file(temporary);
-    }
+        tokio::task::spawn_blocking(move || export_decoded(image, crop, format, &destination))
+            .await;
     export_result.context("サムネイルの書き出し処理が異常終了しました。")??;
     Ok(())
 }
@@ -233,6 +258,103 @@ mod tests {
     use super::{export, prepare};
     use crate::models::{CropRectNormalized, ThumbnailV1};
     use image::{GenericImageView, Rgb, RgbImage};
+
+    #[tokio::test]
+    async fn imports_additional_images_and_exports_real_png() {
+        use crate::models::ThumbnailFormat;
+        let temp = tempfile::tempdir().unwrap();
+        for extension in ["webp", "tif", "tiff", "bmp", "gif", "avif"] {
+            let source = temp.path().join(format!("集合写真.{extension}"));
+            if extension == "avif" {
+                #[cfg(not(target_os = "macos"))]
+                if crate::tools::magick().is_none() {
+                    continue;
+                }
+                std::fs::copy(
+                    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("../tests/fixtures/sample.avif"),
+                    &source,
+                )
+                .unwrap();
+            } else {
+                RgbImage::from_pixel(96, 64, Rgb([230, 10, 20]))
+                    .save(&source)
+                    .unwrap();
+            }
+            let prepared = prepare(source.to_str().unwrap())
+                .await
+                .unwrap_or_else(|error| panic!("{extension}: {error:#}"));
+            assert_eq!((prepared.source_width, prepared.source_height), (96, 64));
+            let model = ThumbnailV1 {
+                source_path: prepared.source_path,
+                preview_path: prepared.preview_path,
+                source_width: 96,
+                source_height: 64,
+                exif_orientation: 1,
+                zoom: 1.0,
+                crop: CropRectNormalized {
+                    x: 0.0,
+                    y: 0.078125,
+                    width: 1.0,
+                    height: 0.84375,
+                },
+                output_format: ThumbnailFormat::Png,
+            };
+            // The format comes from the saved setting, including a staged filename.
+            let destination = temp.path().join(format!("{extension}.partial.png"));
+            export(&model, &destination).await.unwrap();
+            let bytes = std::fs::read(&destination).unwrap();
+            assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
+            let output = image::open(&destination).unwrap();
+            assert_eq!(output.dimensions(), (1920, 1080));
+            let pixel = output.to_rgb8().get_pixel(960, 540).0;
+            assert!(pixel[0] > 180 && pixel[1] < 50, "{extension}: {pixel:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn animated_gif_uses_first_frame() {
+        use image::{
+            codecs::gif::{GifEncoder, Repeat},
+            Frame, Rgba, RgbaImage,
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("animated.gif");
+        let mut encoder = GifEncoder::new(std::fs::File::create(&source).unwrap());
+        encoder.set_repeat(Repeat::Infinite).unwrap();
+        encoder
+            .encode_frame(Frame::new(RgbaImage::from_pixel(
+                96,
+                64,
+                Rgba([255, 0, 0, 255]),
+            )))
+            .unwrap();
+        encoder
+            .encode_frame(Frame::new(RgbaImage::from_pixel(
+                96,
+                64,
+                Rgba([0, 0, 255, 255]),
+            )))
+            .unwrap();
+        drop(encoder);
+        let prepared = prepare(source.to_str().unwrap()).await.unwrap();
+        let preview = image::open(prepared.preview_path).unwrap().to_rgb8();
+        assert!(preview.get_pixel(48, 32).0[0] > 240);
+        assert!(preview.get_pixel(48, 32).0[2] < 20);
+    }
+
+    #[test]
+    fn old_thumbnail_defaults_to_jpeg_and_png_setting_round_trips() {
+        let json = serde_json::json!({"sourcePath":"group.png", "previewPath":"preview.jpg", "sourceWidth":96,
+            "sourceHeight":64, "exifOrientation":1, "zoom":1,
+            "crop":{"x":0,"y":0,"width":1,"height":1}});
+        let mut model: ThumbnailV1 = serde_json::from_value(json).unwrap();
+        assert_eq!(model.output_format.extension(), "jpg");
+        model.output_format = crate::models::ThumbnailFormat::Png;
+        let restored: ThumbnailV1 =
+            serde_json::from_slice(&serde_json::to_vec(&model).unwrap()).unwrap();
+        assert_eq!(restored.output_format.extension(), "png");
+    }
 
     #[tokio::test]
     async fn exports_exact_youtube_thumbnail_size() {
@@ -256,6 +378,7 @@ mod tests {
                 height: 0.75,
             },
             zoom: 1.0,
+            output_format: Default::default(),
         };
         export(&model, &destination).await.unwrap();
         let output = image::open(destination).unwrap();
@@ -286,6 +409,7 @@ mod tests {
                 height: 1.0,
             },
             zoom: 1.0,
+            output_format: Default::default(),
         };
         export(&model, &destination).await.unwrap();
         let output = image::open(destination).unwrap();

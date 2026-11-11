@@ -1,0 +1,143 @@
+import PhotosUI
+import SwiftUI
+import UniformTypeIdentifiers
+
+struct ShareSheet: UIViewControllerRepresentable {
+    let urls: [URL]
+    func makeUIViewController(context: Context) -> UIActivityViewController { UIActivityViewController(activityItems: urls, applicationActivities: nil) }
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}
+
+struct ExportView: View {
+    @EnvironmentObject private var store: AppStore
+    @State private var folderPicker = false
+    @State private var destination: URL?
+    @State private var destinationBookmark: Data?
+    @State private var sharing = false
+    @State private var shareURLs: [URL] = []
+    @State private var cleanup = false
+    @State private var cleanCompleted = false
+    @State private var preview = false
+    var body: some View {
+        Form {
+            Section("画質") {
+                Picker("解像度", selection: Binding(get: {
+                    store.project.matchesSourceResolution == true ? "auto" : store.project.resolution.rawValue
+                }, set: { value in
+                    store.project.matchesSourceResolution = value == "auto"
+                    if let resolution = Resolution(rawValue: value) { store.project.resolution = resolution }
+                })) {
+                    Text("先頭の動画に合わせる（\(store.project.outputSize.width)×\(store.project.outputSize.height)）").tag("auto")
+                    ForEach(Resolution.allCases) { Text($0.rawValue).tag($0.rawValue) }
+                }.accessibilityIdentifier("outputResolution")
+                Picker("フレームレート", selection: Binding(get: {
+                    store.project.matchesSourceFrameRate == true ? "auto" : store.project.frameRate.rawValue
+                }, set: { value in
+                    store.project.matchesSourceFrameRate = value == "auto"
+                    if let rate = FrameRate(rawValue: value) { store.project.frameRate = rate }
+                })) {
+                    Text(store.project.clips.isEmpty ? "自動" : "自動（\(store.project.outputFrameRate.rawValue) fps）").tag("auto")
+                    ForEach(FrameRate.allCases) { Text($0.rawValue + " fps").tag($0.rawValue) }
+                }.accessibilityIdentifier("outputFrameRate")
+                if store.project.matchesSourceFrameRate == true, !store.project.clips.isEmpty {
+                    Text("先頭の動画に合わせます。").font(.caption).foregroundStyle(.secondary)
+                }
+            }.disabled(store.exporting || store.busy)
+            Section("保存先") {
+                LabeledContent("出力先", value: destination?.lastPathComponent ?? "アプリ内")
+                Button("ファイルのフォルダーを選択", systemImage: "folder") { folderPicker = true }
+                if destination != nil { Button("アプリ内に戻す") { destination = nil; destinationBookmark = nil; store.project.destinationBookmark = nil } }
+            }.disabled(store.exporting || store.busy)
+            if let timeline = store.timeline {
+                let capacity = CapacityEstimate(duration: timeline.duration, bitrate: store.project.outputSize.bitrate, separateDestination: destination != nil)
+                Section("確認") {
+                    Button("仕上がりを確認", systemImage: "play.rectangle") { preview = true }
+                        .disabled(store.exporting || store.busy || store.project.clips.isEmpty)
+                    LabeledContent("動画の長さ", value: Clock.text(timeline.duration))
+                    LabeledContent("バンド数", value: "\(store.project.groups.count)組")
+                    LabeledContent("完成動画の目安", value: bytes(capacity.output))
+                    LabeledContent("端末内の作業容量の目安", value: bytes(capacity.localWorking))
+                    if destination != nil { LabeledContent("保存先に必要な容量の目安", value: bytes(capacity.destinationWorking)) }
+                }
+                Section("チャプター") {
+                    Text(timeline.chapters.isEmpty ? "動画を追加してください。" : timeline.chapters).font(.system(.body, design: .monospaced)).textSelection(.enabled)
+                    Button("チャプターをコピー", systemImage: "doc.on.doc") { UIPasteboard.general.string = timeline.chapters }
+                    ForEach(timeline.warnings, id: \.self) { Text($0).font(.caption).foregroundStyle(.orange) }
+                }
+            } else {
+                Section { Text((try? invalidReason()) ?? "動画を追加してください。").foregroundStyle(.orange) }
+            }
+            if !store.exportedFiles.isEmpty {
+                Section("完成ファイル") {
+                    ForEach(store.exportedFiles.filter { $0.pathExtension != "json" }, id: \.path) { url in
+                        Button(url.lastPathComponent, systemImage: url.pathExtension == "mp4" ? "play.rectangle" : "doc") { shareURLs = [url]; sharing = true }.frame(minHeight: 44)
+                    }
+                    Button("完成ファイルをまとめて共有") { shareURLs = store.exportedFiles.filter { $0.pathExtension != "json" }; sharing = true }
+                }
+            }
+            Section("容量と診断") {
+                Button("処理済み区間を削除", role: .destructive) { cleanCompleted = false; cleanup = true }.disabled(store.exporting || store.busy)
+                Button("アプリ内の完成ファイルを削除", role: .destructive) { cleanCompleted = true; cleanup = true }.disabled(store.exporting || store.busy)
+                if let report = store.diagnosticFile {
+                    Button("直近の診断レポートを共有") { shareURLs = [report]; sharing = true }
+                }
+            }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            exportControls.padding(.horizontal, 16).padding(.vertical, 10).background(.regularMaterial)
+        }
+        .fileImporter(isPresented: $folderPicker, allowedContentTypes: [.folder], allowsMultipleSelection: false) { result in
+            do {
+                if let url = try result.get().first {
+                    let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }
+                    destinationBookmark = try url.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)
+                    store.project.destinationBookmark = destinationBookmark
+                    destination = url
+                }
+            } catch { store.message = error.localizedDescription }
+        }
+        .sheet(isPresented: $sharing) { ShareSheet(urls: shareURLs) }
+        .sheet(isPresented: $preview) { TimelinePreview(project: store.project, directory: store.directory) }
+        .onAppear {
+            destinationBookmark = store.project.destinationBookmark
+            do { destination = try resolveDestination() }
+            catch { store.message = "保存先のフォルダーを選び直してください。" }
+        }
+        .alert(cleanCompleted ? "アプリ内の完成ファイルを削除しますか？" : "処理済み区間を削除しますか？", isPresented: $cleanup) {
+            Button("削除", role: .destructive) {
+                Task { if cleanCompleted { await store.clearCompletedFiles() } else { await store.clearExportCache() } }
+            }
+            Button("キャンセル", role: .cancel) {}
+        } message: {
+            Text(cleanCompleted
+                ? "アプリ内の完成品を削除します。編集内容・素材・外部のコピーは残ります。"
+                : "編集内容・素材・完成品は残ります。次回は再処理します。")
+        }
+    }
+    private var exportControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if store.exporting {
+                ProgressView(value: store.progress)
+                Text(store.exportStatus).font(.subheadline)
+                Text("書き出し中はアプリを開いたままにしてください。")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("中断する", role: .destructive) { store.cancelExport() }.frame(maxWidth: .infinity, minHeight: 44)
+            } else {
+                Button {
+                    do { store.startExport(destination: try resolveDestination()) }
+                    catch { store.message = "保存先へ再アクセスできません。フォルダーを選び直してください。" }
+                } label: { Label("書き出しを開始", systemImage: "square.and.arrow.up").frame(maxWidth: .infinity, minHeight: 44) }
+                    .buttonStyle(.borderedProminent).disabled(store.project.clips.isEmpty || store.timeline == nil || store.busy)
+                    .accessibilityIdentifier("startExport")
+                if !store.exportStatus.isEmpty { Text(store.exportStatus).font(.subheadline) }
+            }
+        }
+    }
+    func bytes(_ value: Int64) -> String { ByteCountFormatter.string(fromByteCount: value, countStyle: .file) }
+    func invalidReason() throws -> String { do { _ = try Timeline(store.project); return "動画を追加してください。" } catch { return error.localizedDescription } }
+    func resolveDestination() throws -> URL? {
+        guard let destinationBookmark else { return nil }
+        var stale = false
+        return try URL(resolvingBookmarkData: destinationBookmark, options: .withoutUI, bookmarkDataIsStale: &stale)
+    }
+}
