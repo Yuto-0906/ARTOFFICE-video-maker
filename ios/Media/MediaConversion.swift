@@ -28,7 +28,12 @@ enum MediaConversion {
                 let session = FFmpegKit.executeWithArgumentsAsync(arguments, withCompleteCallback: { session in
                     if ReturnCode.isSuccess(session.getReturnCode()) { continuation.resume() }
                     else if ReturnCode.isCancel(session.getReturnCode()) { continuation.resume(throwing: CancellationError()) }
-                    else { continuation.resume(throwing: AppError.message("この動画を変換できませんでした。映像・音声形式を確認してください。")) }
+                    else {
+                        #if DEBUG
+                        print("ARTOFFICE conversion diagnostic: \(session.getOutput())")
+                        #endif
+                        continuation.resume(throwing: AppError.message("この動画を変換できませんでした。映像・音声形式を確認してください。"))
+                    }
                 }, onDispatchQueue: queue)
                 cancellation.install(session.getSessionId())
             }
@@ -37,12 +42,24 @@ enum MediaConversion {
     }
 
     static func normalize(_ source: URL, output: URL, storage: URL, minimumDuration: Int64) async throws {
-        let session = FFprobeKit.getMediaInformation(source.path)
-        guard let information = session.getMediaInformation(),
+        // This FFmpegKit bridge captures av_log, not FFprobe's JSON stdout.
+        // Write machine-readable metadata separately so decoder messages cannot mix with it.
+        let metadataURL = output.deletingLastPathComponent().appendingPathComponent("metadata-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: metadataURL) }
+        let session = FFprobeKit.executeWithArguments(["-v", "error", "-hide_banner", "-protocol_whitelist", "file,pipe",
+            "-show_format", "-show_streams", "-of", "json", "-o", metadataURL.path, source.path])
+        guard ReturnCode.isSuccess(session.getReturnCode()),
+              let json = try? String(contentsOf: metadataURL, encoding: .utf8),
+              let information = MediaInformationJsonParser.from(json),
               let video = information.getStreams().first(where: { $0.getType() == "video" }),
               let duration = information.getDuration().flatMap(Double.init), duration.isFinite, duration > 0,
               let width = video.getWidth()?.intValue, let height = video.getHeight()?.intValue,
-              width > 0, height > 0 else { throw AppError.message("動画の映像または長さを取得できませんでした。") }
+              width > 0, height > 0 else {
+            #if DEBUG
+            print("ARTOFFICE metadata diagnostic: \(session.getOutput())")
+            #endif
+            throw AppError.message("動画の映像または長さを取得できませんでした。")
+        }
         guard duration >= Clock.seconds(minimumDuration) else { throw AppError.message("元のカット範囲より短い動画です。対応する素材を選んでください。") }
         let codec = video.getCodec() ?? ""
         let pixelFormat = video.getFormat() ?? ""

@@ -49,7 +49,7 @@ async fn encode(source: &Path, destination: &Path, copy_video: bool) -> Result<(
     } else {
         command.args([
             "-vf", "scale=1280:720:force_original_aspect_ratio=decrease:force_divisible_by=2:reset_sar=1,format=yuv420p",
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26", "-threads", "2",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26", "-maxrate", "6M", "-bufsize", "12M", "-threads", "2",
         ]);
     }
     let output = command
@@ -95,6 +95,22 @@ pub async fn prepare(source_path: &str) -> Result<String> {
     let info = media::probe_one(&source).await?;
     // Rewrap compatible video without reducing quality or spending time on encoding.
     let copy_video = info.video_codec == "h264" && info.pixel_format == "yuv420p";
+    let duration = info.duration_seconds.max(0.0);
+    let estimated = if copy_video {
+        metadata.len() as f64 + duration * 128_000.0 / 8.0
+    } else {
+        (duration * 6_128_000.0 / 8.0).max(metadata.len() as f64)
+    };
+    let required = (estimated * 1.1) as u64;
+    let available = fs2::available_space(
+        destination
+            .parent()
+            .context("キャッシュ保存先がありません。")?,
+    )?;
+    anyhow::ensure!(
+        available > required.saturating_add(100_000_000),
+        "プレビュー用の空き容量が不足しています。"
+    );
     if !copy_video || encode(&source, &temporary.0, true).await.is_err() {
         encode(&source, &temporary.0, false).await?;
     }

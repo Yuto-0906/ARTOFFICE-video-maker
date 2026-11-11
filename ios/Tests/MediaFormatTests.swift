@@ -17,10 +17,16 @@ final class MediaFormatTests: XCTestCase {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         for extensionName in ["mp4", "mov", "mkv", "webm", "mts", "m2ts", "avi", "wmv"] {
+            print("ARTOFFICE format import: \(extensionName)")
             let source = try fixture(extensionName)
             let original = try Data(contentsOf: source)
             // A format that needs conversion is stored locally even in reference mode.
-            let clip = try await MediaFiles.importVideo(source, copy: extensionName != "mkv", directory: root)
+            let clip: Clip
+            do { clip = try await MediaFiles.importVideo(source, copy: extensionName != "mkv", directory: root) }
+            catch {
+                XCTFail("\(extensionName): \(error.localizedDescription)")
+                continue
+            }
             XCTAssertEqual(clip.source.fileName, source.lastPathComponent)
             XCTAssertTrue(clip.source.hasAudio, extensionName)
             XCTAssertEqual(Clock.seconds(clip.source.duration), 1.5, accuracy: 0.18, extensionName)
