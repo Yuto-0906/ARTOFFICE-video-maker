@@ -35,6 +35,14 @@ struct ProbeStream {
     nb_frames: Option<String>,
     sample_rate: Option<String>,
     channels: Option<u32>,
+    #[serde(default)]
+    side_data_list: Vec<ProbeSideData>,
+    tags: Option<std::collections::HashMap<String, String>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProbeSideData {
+    rotation: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -71,6 +79,7 @@ pub(crate) async fn probe_one(path: &Path) -> Result<MediaInfo> {
     let mut command = Command::new(ffprobe);
     tools::hide_console(&mut command);
     let output = command
+        .kill_on_drop(true)
         .arg("-v")
         .arg("error")
         .arg("-show_format")
@@ -98,15 +107,18 @@ pub(crate) async fn probe_one(path: &Path) -> Result<MediaInfo> {
         .iter()
         .find(|stream| stream.codec_type.as_deref() == Some("audio"));
 
-    let fps = video
-        .avg_frame_rate
-        .as_deref()
-        .or(video.r_frame_rate.as_deref())
-        .map(parse_rational)
-        .unwrap_or(Rational {
-            numerator: 0,
-            denominator: 1,
-        });
+    let fps = [
+        video.avg_frame_rate.as_deref(),
+        video.r_frame_rate.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .map(parse_rational)
+    .find(|rate| rate.numerator > 0 && rate.denominator > 0)
+    .unwrap_or(Rational {
+        numerator: 0,
+        denominator: 1,
+    });
     let duration_seconds = video
         .duration
         .as_deref()
@@ -121,8 +133,16 @@ pub(crate) async fn probe_one(path: &Path) -> Result<MediaInfo> {
         .as_deref()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or_else(|| (duration_seconds * fps.value()).round().max(1.0) as u64);
-    let width = video.width.unwrap_or(0);
-    let height = video.height.unwrap_or(0);
+    let (mut width, mut height) = (video.width.unwrap_or(0), video.height.unwrap_or(0));
+    let rotation = video
+        .side_data_list
+        .iter()
+        .find_map(|s| s.rotation)
+        .or_else(|| video.tags.as_ref()?.get("rotate")?.parse::<f64>().ok())
+        .unwrap_or(0.0);
+    if rotation.is_finite() && (rotation.abs() % 180.0 - 90.0).abs() < 0.01 {
+        std::mem::swap(&mut width, &mut height);
+    }
     let video_codec = video.codec_name.clone().unwrap_or_default();
     let pixel_format = video.pix_fmt.clone().unwrap_or_default();
     let audio_codec = audio.and_then(|stream| stream.codec_name.clone());
@@ -131,15 +151,6 @@ pub(crate) async fn probe_one(path: &Path) -> Result<MediaInfo> {
         .and_then(|value| value.parse::<u32>().ok());
     let channels = audio.and_then(|stream| stream.channels);
     let mut reasons = Vec::new();
-    if width != 1920 || height != 1080 {
-        reasons.push(format!("解像度を1920×1080基準へ変換（{width}×{height}）"));
-    }
-    if (fps.value() - 60000.0 / 1001.0).abs() > 0.02 {
-        reasons.push(format!(
-            "フレームレートを59.94fpsへ変換（{:.3}fps）",
-            fps.value()
-        ));
-    }
     if video_codec != "h264" {
         reasons.push(format!("映像をH.264へ変換（{video_codec}）"));
     }
@@ -293,6 +304,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rotated_source_reports_the_display_dimensions() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("rotated.mp4");
+        let fixture =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/sample.mp4");
+        let output = std::process::Command::new(tools::ffmpeg().unwrap())
+            .args(["-v", "error", "-display_rotation:v:0", "90", "-i"])
+            .arg(fixture)
+            .args(["-c", "copy"])
+            .arg(&source)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let info = probe_one(&source).await.unwrap();
+        assert_eq!((info.width, info.height), (64, 96));
+        assert!((info.fps.value() - 30.0).abs() < 0.001);
+    }
+
+    #[tokio::test]
     async fn flags_media_that_requires_conversion() {
         let Some(ffmpeg) = tools::ffmpeg() else {
             return;
@@ -330,14 +360,6 @@ mod tests {
 
         let media = probe_one(&source).await.unwrap();
         assert!(media.needs_conversion);
-        assert!(media
-            .conversion_reasons
-            .iter()
-            .any(|reason| reason.contains("1280×720")));
-        assert!(media
-            .conversion_reasons
-            .iter()
-            .any(|reason| reason.contains("30.000fps")));
         assert!(media
             .conversion_reasons
             .iter()

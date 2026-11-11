@@ -151,8 +151,8 @@ export function parseClock(value: string): number | null {
   return Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]) + milliseconds / 1000;
 }
 
-export function estimateOutputBytes(durationSeconds: number, resolution: "1080p" | "1440p"): number {
-  const videoMbps = resolution === "1080p" ? 15 : 30;
+export function estimateOutputBytes(durationSeconds: number, resolution: "source" | "1080p" | "1440p", source?: { width: number; height: number }): number {
+  const videoMbps = resolution === "source" ? Math.min(80, Math.max(4, 15 * (source?.width ?? 1920) * (source?.height ?? 1080) / (1920 * 1080))) : resolution === "1080p" ? 15 : 30;
   const totalMbps = videoMbps + 0.384;
   return (durationSeconds * totalMbps * 1_000_000) / 8;
 }
@@ -190,7 +190,8 @@ export function validateProject(value: unknown): value is ProjectV1 {
     (project.appVersion === "0.1.0" || project.appVersion === "0.2.0" || project.appVersion === "0.2.1" || project.appVersion === "0.3.0" || project.appVersion === "0.4.0") &&
     typeof project.eventName === "string" &&
     Array.isArray(project.clips) &&
-    (project.outputResolution === "1080p" || project.outputResolution === "1440p") &&
+    (project.outputResolution === "source" || project.outputResolution === "1080p" || project.outputResolution === "1440p") &&
+    (project.outputFrameRate === undefined || ["source", "23.976", "24", "25", "29.97", "30", "50", "59.94", "60"].includes(project.outputFrameRate)) &&
     project.transitionMs === 500
   );
 }

@@ -35,8 +35,21 @@ fn list_video_files(folder: String) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-async fn prepare_video_preview(source_path: String) -> Result<String, String> {
-    preview::prepare(&source_path).await.map_err(command_error)
+async fn prepare_video_preview(
+    source_path: String,
+    seconds: f64,
+    client_id: String,
+    generation: u64,
+) -> Result<preview::PreparedPreview, String> {
+    let cancellation = preview::begin(client_id, generation).map_err(command_error)?;
+    preview::prepare(&source_path, seconds, &cancellation)
+        .await
+        .map_err(command_error)
+}
+
+#[tauri::command]
+fn cancel_video_preview(client_id: String, generation: u64) {
+    preview::cancel(client_id, generation);
 }
 
 #[tauri::command]
@@ -102,6 +115,7 @@ pub fn run() {
             tool_status,
             list_video_files,
             prepare_video_preview,
+            cancel_video_preview,
             probe_media,
             read_project,
             write_project,

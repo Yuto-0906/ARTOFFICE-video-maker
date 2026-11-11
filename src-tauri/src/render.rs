@@ -254,14 +254,31 @@ fn validate_request(request: &RenderRequest) -> Result<OutputPaths> {
             clip.band_name
         );
     }
+    let (width, height) = request.dimensions();
+    anyhow::ensure!(
+        width > 0
+            && height > 0
+            && width <= 8192
+            && height <= 8192
+            && width % 2 == 0
+            && height % 2 == 0,
+        "出力の幅と高さには8192以下の正の偶数が必要です。"
+    );
+    let fps = request.fps();
+    anyhow::ensure!(
+        fps.numerator > 0
+            && fps.denominator > 0
+            && fps.value() <= 480.0
+            && fps.numerator <= i32::MAX as u64,
+        "出力フレームレートが不正です。"
+    );
     let paths = output_paths_for(request)?;
     anyhow::ensure!(
         request.overwrite || paths.existing.is_empty(),
         "出力先に同名ファイルがあります。"
     );
     let estimated =
-        ((request.resolution.bitrate() + 384_000) as f64 * total_duration(&request.clips) / 8.0
-            * 1.1) as u64;
+        ((request.bitrate() + 384_000) as f64 * total_duration(&request.clips) / 8.0 * 1.1) as u64;
     let free = fs2::available_space(&request.output_directory)
         .context("保存先の空き容量を確認できませんでした。")?;
     anyhow::ensure!(
@@ -326,6 +343,26 @@ fn build_filter_graph_internal(
     working: &Path,
     show_first_title: bool,
 ) -> Result<PathBuf> {
+    build_filter_graph_with_rate(
+        clips,
+        resolution,
+        dimensions,
+        font_path,
+        working,
+        show_first_title,
+        OUTPUT_FPS,
+    )
+}
+
+fn build_filter_graph_with_rate(
+    clips: &[ClipV1],
+    resolution: Resolution,
+    dimensions: (u32, u32),
+    font_path: &Path,
+    working: &Path,
+    show_first_title: bool,
+    fps: &str,
+) -> Result<PathBuf> {
     let (width, height) = dimensions;
     let working_font = working.join(FILTER_FONT_FILE);
     fs::copy(font_path, &working_font).context("書き出し用フォントを準備できませんでした。")?;
@@ -338,7 +375,7 @@ fn build_filter_graph_internal(
     let mut graph = String::new();
     for (index, clip) in clips.iter().enumerate() {
         graph.push_str(&format!(
-            "[{index}:v]trim=start={:.9}:end={:.9},setpts=PTS-STARTPTS,yadif=deint=interlaced,fps={OUTPUT_FPS},scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,format=yuv420p,settb=AVTB",
+            "[{index}:v]trim=start={:.9}:end={:.9},setpts=PTS-STARTPTS,yadif=deint=interlaced,fps={fps},scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,format=yuv420p,settb=AVTB",
             clip.start_seconds(),
             clip.end_seconds(),
         ));
@@ -411,7 +448,18 @@ fn encoder_args(
     resolution: Resolution,
     bitrate_override: Option<u64>,
 ) -> Vec<OsString> {
-    let bitrate = bitrate_override.unwrap_or_else(|| resolution.bitrate());
+    encoder_args_with_rate(
+        config,
+        bitrate_override.unwrap_or_else(|| resolution.bitrate()),
+        crate::models::FrameRate::default().resolve(None),
+    )
+}
+
+fn encoder_args_with_rate(
+    config: &EncoderConfig,
+    bitrate: u64,
+    fps: crate::models::Rational,
+) -> Vec<OsString> {
     let maxrate = bitrate * 7 / 5;
     let bufsize = bitrate * 2;
     let mut args = Vec::<OsString>::new();
@@ -452,9 +500,12 @@ fn encoder_args(
             // one track tick long. Keep every packet at the fixed output duration
             // without changing PTS/DTS or the ordering of B-frames.
             push!("-bsf:v");
-            push!("setts=time_base=1/60000:prescale=1:pts=PTS:dts=DTS:duration=1001");
+            push!(format!(
+                "setts=time_base=1/{}:prescale=1:pts=PTS:dts=DTS:duration={}",
+                fps.numerator, fps.denominator
+            ));
             push!("-video_track_timescale");
-            push!("60000");
+            push!(fps.numerator.to_string());
         }
         _ => {}
     }
@@ -625,9 +676,17 @@ async fn execute_ffmpeg(execution: FfmpegExecution<'_>) -> Result<bool> {
         .arg("[aout]")
         .arg("-c:v")
         .arg(encoder.codec)
-        .args(encoder_args(encoder, request.resolution, None))
+        .args(encoder_args_with_rate(
+            encoder,
+            request.bitrate(),
+            request.fps(),
+        ))
         .arg("-r")
-        .arg(OUTPUT_FPS)
+        .arg(format!(
+            "{}/{}",
+            request.fps().numerator,
+            request.fps().denominator
+        ))
         .arg("-pix_fmt")
         .arg("yuv420p")
         .arg("-color_primaries")
@@ -892,12 +951,15 @@ async fn run_job(
         });
     }
 
-    let graph = build_filter_graph(
+    let fps = request.fps();
+    let graph = build_filter_graph_with_rate(
         &request.clips,
         request.resolution,
-        request.resolution.dimensions(),
+        request.dimensions(),
         &font,
         &working,
+        true,
+        &format!("{}/{}", fps.numerator, fps.denominator),
     )?;
     let execution_result = execute_ffmpeg(FfmpegExecution {
         app: app.as_ref(),
@@ -919,8 +981,8 @@ async fn run_job(
                     .remove(0);
             probe.media.is_some_and(|media| {
                 media.video_codec == "h264"
-                    && (media.width, media.height) == request.resolution.dimensions()
-                    && (media.fps.value() - 60000.0 / 1001.0).abs() < 0.001
+                    && (media.width, media.height) == request.dimensions()
+                    && (media.fps.value() - request.fps().value()).abs() < 0.001
             })
         } else {
             false
@@ -1150,6 +1212,7 @@ pub(crate) async fn verify_packaged_runtime(directory: &Path) -> Result<()> {
             event_name: format!("移動後の確認 {name}"),
             output_directory: directory.to_string_lossy().into_owned(),
             resolution,
+            frame_rate: crate::models::FrameRate::default(),
             clips: clips.clone(),
             thumbnail: Some(thumbnail.clone()),
             overwrite: false,
@@ -1240,6 +1303,7 @@ pub(crate) async fn verify_packaged_runtime(directory: &Path) -> Result<()> {
         event_name: "cancel-process".into(),
         output_directory: directory.to_string_lossy().into_owned(),
         resolution: Resolution::P1440,
+        frame_rate: crate::models::FrameRate::default(),
         clips,
         thumbnail: None,
         overwrite: false,
@@ -1294,6 +1358,68 @@ mod tests {
     use crate::models::{ClipV1, MediaInfo, ProjectV1, Rational, Resolution, SourceFingerprint};
     use crate::{media, project, tools};
     use tokio_util::sync::CancellationToken;
+
+    #[tokio::test]
+    async fn source_settings_render_at_original_size_and_rate() {
+        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../tests/fixtures/sample.mp4")
+            .canonicalize()
+            .unwrap();
+        let info = media::probe_one(&source).await.unwrap();
+        let mut input = clip("Source", info.duration_seconds);
+        input.source_path = source.to_string_lossy().into_owned();
+        input.out_frame_exclusive = info.frame_count;
+        input.media = info;
+        let temp = tempfile::tempdir().unwrap();
+        let request = crate::models::RenderRequest {
+            event_name: "source".into(),
+            output_directory: temp.path().to_string_lossy().into_owned(),
+            resolution: Resolution::Source,
+            frame_rate: crate::models::FrameRate::Source,
+            clips: vec![input],
+            thumbnail: None,
+            overwrite: false,
+        };
+        let fps = request.fps();
+        let graph = super::build_filter_graph_with_rate(
+            &request.clips,
+            request.resolution,
+            request.dimensions(),
+            &tools::font().unwrap(),
+            temp.path(),
+            true,
+            &format!("{}/{}", fps.numerator, fps.denominator),
+        )
+        .unwrap();
+        let output = temp.path().join("output.mp4");
+        let result = StdCommand::new(tools::ffmpeg().unwrap())
+            .current_dir(temp.path())
+            .args(["-hide_banner", "-loglevel", "error", "-i"])
+            .arg(&source)
+            .arg("-filter_complex_script")
+            .arg(graph)
+            .args([
+                "-map", "[vout]", "-map", "[aout]", "-c:v", "libx264", "-c:a", "aac",
+            ])
+            .arg(&output)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let actual = media::probe_one(&output).await.unwrap();
+        assert_eq!((actual.width, actual.height), (96, 64));
+        assert!((actual.fps.value() - 30.0).abs() < 0.001);
+        assert!((actual.duration_seconds - request.clips[0].media.duration_seconds).abs() < 0.1);
+        let encoded = serde_json::to_value(&request).unwrap();
+        assert_eq!(encoded["frameRate"], "source");
+        let mut legacy = encoded;
+        legacy.as_object_mut().unwrap().remove("frameRate");
+        let legacy: crate::models::RenderRequest = serde_json::from_value(legacy).unwrap();
+        assert!((legacy.fps().value() - 60000.0 / 1001.0).abs() < 0.001);
+    }
 
     #[cfg(target_os = "macos")]
     #[test]
@@ -1380,6 +1506,7 @@ mod tests {
             event_name: "ライブ".into(),
             output_directory: temp.path().to_string_lossy().into_owned(),
             resolution: Resolution::P1080,
+            frame_rate: crate::models::FrameRate::default(),
             clips: vec![],
             thumbnail: Some(thumbnail),
             overwrite: false,
@@ -1635,6 +1762,7 @@ mod tests {
                         event_name: stem.into(),
                         output_directory: temp.path().to_string_lossy().into_owned(),
                         resolution,
+                        frame_rate: crate::models::FrameRate::default(),
                         clips: clips.clone(),
                         thumbnail: None,
                         overwrite: false,
@@ -1822,6 +1950,7 @@ mod tests {
             event_name: event_name.clone(),
             clips: clips.clone(),
             output_resolution: Resolution::P1080,
+            output_frame_rate: crate::models::FrameRate::default(),
             transition_ms: 500,
             thumbnail: None,
         };

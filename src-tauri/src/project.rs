@@ -40,6 +40,7 @@ mod tests {
             event_name: "8月ライブ".to_string(),
             clips: Vec::new(),
             output_resolution: Resolution::P1080,
+            output_frame_rate: crate::models::FrameRate::default(),
             transition_ms: 500,
             thumbnail: None,
         };

@@ -266,3 +266,5 @@ input { width: 100%; border: 1px solid var(--border); border-radius: 9px; paddin
 }
 
 .preview-status { position: absolute; inset: 0; display: grid; place-items: center; background: #090a0c; color: #e8edf5; font-size: 13px; }
+
+.playhead-range { width: 100%; margin: 0 0 16px; accent-color: var(--accent); }

@@ -7,6 +7,7 @@ import {
   centeredCropForAspect,
   clipGroups,
   duplicateOrders,
+  estimateOutputBytes,
   frameToSeconds,
   formatChapterTime,
   isVideoPath,
@@ -209,5 +210,18 @@ describe("project compatibility", () => {
     expect(validateProject({ ...base, appVersion: "0.2.1" })).toBe(true);
     expect(validateProject({ ...base, appVersion: "0.3.0" })).toBe(true);
     expect(validateProject({ ...base, appVersion: "0.4.0" })).toBe(true);
+  });
+});
+
+
+describe("source output settings", () => {
+  it("自動設定を保存でき，不正なレートを拒否する", () => {
+    const project = { schemaVersion: 1, appVersion: "0.4.0", eventName: "Live", clips: [], outputResolution: "source", outputFrameRate: "source", transitionMs: 500, thumbnail: null };
+    expect(validateProject(JSON.parse(JSON.stringify(project)))).toBe(true);
+    expect(validateProject({ ...project, outputFrameRate: "120" })).toBe(false);
+  });
+  it("自動解像度の見積もりを先頭素材の画素数に合わせる", () => {
+    expect(estimateOutputBytes(60, "source", { width: 3840, height: 2160 })).toBe((60_000_000 + 384_000) * 60 / 8);
+    expect(estimateOutputBytes(60, "1080p")).toBe((15_000_000 + 384_000) * 60 / 8);
   });
 });

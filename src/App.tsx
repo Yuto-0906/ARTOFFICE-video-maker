@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { useCallback, useImperativeHandle, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -15,6 +15,7 @@ import type {
   RenderRequest,
   RenderStarted,
   Resolution,
+  FrameRate,
   ThumbnailV1,
   ToolStatus,
 } from "./types";
@@ -54,7 +55,8 @@ const EMPTY_PROJECT: ProjectV1 = {
   appVersion: "0.4.0",
   eventName: "",
   clips: [],
-  outputResolution: "1080p",
+  outputResolution: "source",
+  outputFrameRate: "source",
   transitionMs: 500,
   thumbnail: null,
 };
@@ -541,6 +543,7 @@ export default function App() {
       eventName: safeEventName(project.eventName),
       outputDirectory,
       resolution: project.outputResolution,
+      frameRate: project.outputFrameRate ?? "59.94",
       clips: project.clips,
       thumbnail: project.thumbnail,
       overwrite,
@@ -733,6 +736,7 @@ export default function App() {
             progress={renderProgress}
             result={renderResult}
             onResolution={(outputResolution) => updateProject((current) => ({ ...current, outputResolution }))}
+            onFrameRate={(outputFrameRate) => updateProject((current) => ({ ...current, outputFrameRate }))}
             onChooseDirectory={chooseOutputDirectory}
             onStart={startRender}
             onCancel={cancelRender}
@@ -925,51 +929,111 @@ function ImportStep(props: ImportStepProps) {
   );
 }
 
+interface PreviewHandle { seek: (seconds: number) => void }
+interface PreparedPreview { path: string; startSeconds: number; endSeconds: number }
 interface PreviewVideoProps {
   sourcePath: string;
   preferPreview: boolean;
-  playerRef: RefObject<HTMLVideoElement | null>;
-  onLoadedMetadata: () => void;
-  onTimeUpdate: (event: React.SyntheticEvent<HTMLVideoElement>) => void;
+  playerRef: RefObject<PreviewHandle | null>;
+  startSeconds: number;
+  stopSeconds: number;
+  onTimeUpdate: (seconds: number) => void;
   onError: (message: string) => void;
 }
 
-function PreviewVideo({ sourcePath, preferPreview, playerRef, onLoadedMetadata, onTimeUpdate, onError }: PreviewVideoProps) {
+function PreviewVideo({ sourcePath, preferPreview, playerRef, startSeconds, stopSeconds, onTimeUpdate, onError }: PreviewVideoProps) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const clientId = useRef(crypto.randomUUID());
+  const generation = useRef(0);
+  const pending = useRef(startSeconds);
+  const seekTarget = useRef<number | null>(startSeconds);
+  const resume = useRef(false);
   const [needsPreview, setNeedsPreview] = useState(preferPreview);
-  const [previewPath, setPreviewPath] = useState<string | null>(null);
+  const [windowStart, setWindowStart] = useState(Math.floor(startSeconds / 30) * 30);
+  const [preview, setPreview] = useState<PreparedPreview | null>(null);
   const [failed, setFailed] = useState(false);
+
+  function seek(seconds: number) {
+    pending.current = seconds;
+    seekTarget.current = seconds;
+    const video = videoRef.current;
+    if (!needsPreview || (preview && seconds >= preview.startSeconds && seconds < preview.endSeconds)) {
+      if (video?.readyState) video.currentTime = Math.max(0, seconds - (needsPreview ? preview!.startSeconds : 0));
+    } else {
+      resume.current = resume.current || Boolean(video && !video.paused);
+      video?.pause();
+      setPreview(null);
+      setWindowStart(Math.floor(seconds / 30) * 30);
+    }
+  }
+  useImperativeHandle(playerRef, () => ({ seek }));
+
+  function finishSeek() {
+    const video = videoRef.current;
+    if (!video || video.readyState < 2 || video.seeking || video.currentSrc !== video.src) return;
+    const time = video.currentTime + (needsPreview ? preview?.startSeconds ?? 0 : 0);
+    if (seekTarget.current !== null && Math.abs(time - seekTarget.current) > 0.001) return;
+    seekTarget.current = null;
+    if (resume.current) { resume.current = false; void video.play().catch(() => {}); }
+  }
 
   useEffect(() => {
     if (!needsPreview) return;
     let active = true;
-    invoke<string>("prepare_video_preview", { sourcePath }).then((path) => {
-      if (active) setPreviewPath(path);
+    const current = ++generation.current;
+    setFailed(false);
+    invoke<PreparedPreview>("prepare_video_preview", { sourcePath, seconds: windowStart, clientId: clientId.current, generation: current }).then((result) => {
+      if (active) setPreview(result);
     }).catch((reason) => {
-      if (active) {
-        setFailed(true);
-        onError(errorMessage(reason));
-      }
+      if (active) { setFailed(true); onError(errorMessage(reason)); }
     });
-    return () => { active = false; };
-  }, [needsPreview, sourcePath]);
+    return () => {
+      active = false;
+      void invoke("cancel_video_preview", { clientId: clientId.current, generation: current });
+    };
+  }, [needsPreview, sourcePath, windowStart]);
 
   return <>
-    <video
-      ref={playerRef}
-      src={needsPreview ? (previewPath ? convertFileSrc(previewPath) : undefined) : convertFileSrc(sourcePath)}
-      controls
-      preload="metadata"
-      onLoadedMetadata={onLoadedMetadata}
-      onTimeUpdate={onTimeUpdate}
-      onError={() => {
-        if (!needsPreview) setNeedsPreview(true);
-        else if (previewPath) {
-          setFailed(true);
-          onError("プレビューを再生できませんでした。");
+    <video ref={videoRef}
+      src={needsPreview ? (preview ? convertFileSrc(preview.path) : undefined) : convertFileSrc(sourcePath)}
+      controls preload="metadata"
+      onLoadedMetadata={() => {
+        if (needsPreview && !preview) return;
+        const video = videoRef.current!;
+        const target = pending.current - (needsPreview ? preview!.startSeconds : 0);
+        if (target < 0 || target > video.duration) return;
+        video.currentTime = target;
+      }}
+      onSeeked={finishSeek}
+      onLoadedData={finishSeek}
+      onTimeUpdate={(event) => {
+        if (needsPreview && !preview) return;
+        const video = event.currentTarget;
+        finishSeek();
+        if (seekTarget.current !== null || video.seeking || video.readyState < 2) return;
+        const time = video.currentTime + (needsPreview ? preview?.startSeconds ?? 0 : 0);
+        onTimeUpdate(Math.min(stopSeconds, time));
+        if (time >= stopSeconds) {
+          video.pause();
+          if (time > stopSeconds + 0.02) video.currentTime = Math.max(0, stopSeconds - (needsPreview ? preview?.startSeconds ?? 0 : 0));
+        }
+        pending.current = Math.min(stopSeconds, time);
+      }}
+      onEnded={() => {
+        if (needsPreview && preview && preview.endSeconds < stopSeconds - 0.01) {
+          pending.current = preview.endSeconds;
+          seekTarget.current = preview.endSeconds;
+          resume.current = true;
+          setWindowStart(preview.endSeconds);
+          setPreview(null);
         }
       }}
+      onError={() => {
+        if (!needsPreview) { setWindowStart(Math.floor(pending.current / 30) * 30); setNeedsPreview(true); }
+        else if (preview) { setFailed(true); onError("プレビューを再生できませんでした。"); }
+      }}
     />
-    {needsPreview && !previewPath && <div className="preview-status" role="status">{failed ? "プレビューを準備できませんでした。" : "プレビューを準備中…"}</div>}
+    {needsPreview && !preview && <div className="preview-status" role="status">{failed ? "プレビューを準備できませんでした。" : "プレビューを準備中…"}</div>}
   </>;
 }
 
@@ -983,7 +1047,7 @@ interface TrimStepProps {
 }
 
 function TrimStep({ clips, selected, onSelect, onUpdate, onNext, onError }: TrimStepProps) {
-  const playerRef = useRef<HTMLVideoElement>(null);
+  const playerRef = useRef<PreviewHandle>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const fps = selected.media.fps;
   const inSeconds = frameToSeconds(selected.inFrame, fps);
@@ -999,12 +1063,12 @@ function TrimStep({ clips, selected, onSelect, onUpdate, onNext, onError }: Trim
 
   useEffect(() => {
     setCurrentTime(inSeconds);
-    if (playerRef.current) playerRef.current.currentTime = inSeconds;
+    playerRef.current?.seek(inSeconds);
   }, [selected.id, inSeconds]);
 
   function seek(seconds: number) {
     const clamped = Math.min(outSeconds, Math.max(inSeconds, seconds));
-    if (playerRef.current) playerRef.current.currentTime = clamped;
+    playerRef.current?.seek(clamped);
     setCurrentTime(clamped);
   }
 
@@ -1046,20 +1110,15 @@ function TrimStep({ clips, selected, onSelect, onUpdate, onNext, onError }: Trim
             sourcePath={selected.sourcePath}
             preferPreview={!/\.(mp4|mov)$/i.test(selected.sourcePath) || selected.media.videoCodec !== "h264" || selected.media.pixelFormat !== "yuv420p" || (selected.media.hasAudio && selected.media.audioCodec !== "aac")}
             onError={onError}
-            onLoadedMetadata={() => seek(inSeconds)}
-            onTimeUpdate={(event) => {
-              const video = event.currentTarget;
-              setCurrentTime(video.currentTime);
-              if (video.currentTime >= outSeconds) {
-                video.pause();
-                video.currentTime = outSeconds;
-              }
-            }}
+            startSeconds={inSeconds}
+            stopSeconds={outSeconds}
+            onTimeUpdate={setCurrentTime}
           />
           <div className="band-title-preview" style={{ opacity: Math.max(0, Math.min(1, titleOpacity)) }}>{selected.bandName}</div>
         </div>
 
         <div className="timeline-card">
+          <input type="range" className="playhead-range" min={inSeconds} max={outSeconds} step={fps.denominator / fps.numerator} value={Math.min(outSeconds, Math.max(inSeconds, currentTime))} onChange={(event) => seek(Number(event.target.value))} aria-label="再生位置" />
           <div className="timeline-labels"><span>開始 {formatClock(inSeconds)}</span><strong>{formatClock(currentTime)}</strong><span>終了 {formatClock(outSeconds)}</span></div>
           <div className="dual-range">
             <div className="range-fill" style={{ left: `${(selected.inFrame / selected.media.frameCount) * 100}%`, right: `${100 - (selected.outFrameExclusive / selected.media.frameCount) * 100}%` }} />
@@ -1221,6 +1280,7 @@ interface ExportStepProps {
   progress: RenderProgress | null;
   result: RenderFinished | null;
   onResolution: (value: Resolution) => void;
+  onFrameRate: (value: FrameRate) => void;
   onChooseDirectory: () => void;
   onStart: () => void;
   onCancel: () => void;
@@ -1229,7 +1289,7 @@ interface ExportStepProps {
 function ExportStep(props: ExportStepProps) {
   const warnings = chapterWarnings(props.project.clips);
   const rows = chapterRows(props.project.clips);
-  const estimatedBytes = estimateOutputBytes(props.durationSeconds, props.project.outputResolution);
+  const estimatedBytes = estimateOutputBytes(props.durationSeconds, props.project.outputResolution, props.project.clips[0]?.media);
   const progressPercent = Math.round((props.progress?.progress ?? 0) * 100);
 
   return (
@@ -1240,12 +1300,19 @@ function ExportStep(props: ExportStepProps) {
           <div className="settings-card">
             <h2>解像度</h2>
             <div className="resolution-options">
-              {(["1080p", "1440p"] as Resolution[]).map((resolution) => (
+              {(["source", "1080p", "1440p"] as Resolution[]).map((resolution) => (
                 <button key={resolution} className={props.project.outputResolution === resolution ? "selected" : ""} onClick={() => props.onResolution(resolution)} disabled={Boolean(props.renderJobId)}>
-                  <strong>{resolution}</strong><span>{resolution === "1080p" ? "1920×1080・15Mbps" : "2560×1440・30Mbps"}</span>
+                  <strong>{resolution === "source" ? "先頭の動画に合わせる" : resolution}</strong><span>{resolution === "source" ? `${props.project.clips[0]?.media.width ?? 1920}×${props.project.clips[0]?.media.height ?? 1080}` : resolution === "1080p" ? "1920×1080・15Mbps" : "2560×1440・30Mbps"}</span>
                 </button>
               ))}
             </div>
+          </div>
+          <div className="settings-card">
+            <h2>フレームレート</h2>
+            <select aria-label="出力フレームレート" value={props.project.outputFrameRate ?? "59.94"} onChange={(event) => props.onFrameRate(event.target.value as FrameRate)} disabled={Boolean(props.renderJobId)}>
+              <option value="source">先頭の動画に合わせる{props.project.clips[0] ? `（${Number((props.project.clips[0].media.fps.numerator / props.project.clips[0].media.fps.denominator).toFixed(3))} fps）` : ""}</option>
+              {["23.976", "24", "25", "29.97", "30", "50", "59.94", "60"].map((rate) => <option key={rate} value={rate}>{rate} fps</option>)}
+            </select>
           </div>
           <div className="settings-card">
             <h2>保存先</h2>

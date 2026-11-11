@@ -1,4 +1,5 @@
-export type Resolution = "1080p" | "1440p";
+export type Resolution = "source" | "1080p" | "1440p";
+export type FrameRate = "source" | "23.976" | "24" | "25" | "29.97" | "30" | "50" | "59.94" | "60";
 
 export interface Rational {
   numerator: number;
@@ -65,6 +66,7 @@ export interface ProjectV1 {
   eventName: string;
   clips: ClipV1[];
   outputResolution: Resolution;
+  outputFrameRate?: FrameRate;
   transitionMs: 500;
   thumbnail: ThumbnailV1 | null;
 }
@@ -101,6 +103,7 @@ export interface RenderRequest {
   eventName: string;
   outputDirectory: string;
   resolution: Resolution;
+  frameRate?: FrameRate;
   clips: ClipV1[];
   thumbnail: ThumbnailV1 | null;
   overwrite: boolean;
