@@ -12,6 +12,7 @@ settings:
     MARKETING_VERSION: '1.1'
     CURRENT_PROJECT_VERSION: '7'
     CODE_SIGN_STYLE: Automatic
+    SWIFT_INCLUDE_PATHS: "$(SRCROOT)/NativeFFmpeg"
 packages:
   FFmpegKit:
     url: https://github.com/jaywcjlove/ffmpeg-kit.git
@@ -54,7 +55,6 @@ targets:
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         SUPPORTS_MACCATALYST: NO
         SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: NO
-        SWIFT_INCLUDE_PATHS: "$(SRCROOT)/NativeFFmpeg"
   ARTOFFICETests:
     type: bundle.unit-test
     platform: iOS
