@@ -1,5 +1,17 @@
 # iOS版の実装・検証記録
 
+## 2026年10月28日：ビルド6をiPadへ更新・実機確認
+
+保存状態のはみ出しを修正し，画面内の説明を短縮した。素材一覧にfpsを追加し，新規プロジェクトの出力fpsを自動選択にした。先頭素材の公称値に最も近い対応値を使い，手動選択と既存プロジェクトの保存値を保持する。提供ロゴを基にしたアイコンと，ライト・ダーク別のピンク配色も追加した。
+
+対象は`f0e5cf2147ba6f9f3ac6ec16444a63a2fbefea25`・1.1（ビルド6）。[Azure Run 11](https://dev.azure.com/yuto200596/ios-development/_build/results?buildId=11)でCore29件とRelease署名が成功した。WindowsでIPA構成・iPhoneとiPadのアイコン・アセットカタログ・承認済みプロファイル・対象端末の包含を照合した。IPAは`.cache/ios-signed/azure-build-11/ios-signed/ARTOFFICE-ios-development.ipa`，SHA-256は`72f377923aee69d210ebb973ba35cd549a2db699996cab410713a50f384af8f2`である。
+
+28日11:34 JST，`iPad16,5`・OS27.2へ上書きし，1.1・ビルド6・`ProfileValidated: true`を読み戻した。更新直前と直後で2プロジェクトの編集JSON4ファイルがバイト単位で一致した。原本は`.cache/ios-device-state/ui-update-preservation/before-build-6/`と`after-build-6/`に保存し，動画・写真は取得していない。アイコン・配色・保存表示・fps表示・自動／手動切替・短い出力の確認依頼に対し，ユーザーから「問題なさそう」と回答を得た。新しい性能計測を行ったという意味ではない。
+
+途中のRun 7ではResourcesの指定が無効でアセットが未収録だったため，IPAを実機へ入れずにビルド設定を修正した。署名時とWindowsでアイコン・Assets.car・PrivacyInfo.xcprivacyを検査するようにした。Run 9ではこの検査が通った。Run 10ではCore29件，iPadのUI1件が成功し，両端末のネイティブ15件中，出力形式の1件だけが23.976fpsの時刻丸めで失敗した。他の14件は成功した。iPhone UIはサムネイル画面の取得で時間切れになった。書込み時の時間精度を60kHzから120kHzへ変更し，処理形式を6へ更新して，丸めた旧区間を再利用しないようにした。最新の[Run 12](https://dev.azure.com/yuto200596/ios-development/_build/results?buildId=12)で両端末を再検証中であり，全体成功とはまだ扱わない。
+
+Chromeの反復操作を避けるため，ユーザーが承認したBuild専用PATをWindows DPAPIで保存し，`scripts/ios/azure-build.ps1`から公式REST APIを使う経路へ移した。開始・状態・失敗ログ・IPA取得をAPIで実行確認済みである。PATは最長の2027年10月27日までとし，値はGit・会話に含めない。iPhone実機の確認は引き続き後日対応，5時間の実素材試験はユーザー指示どおり必須にしない。
+
 ## 2026年10月28日：保存表示・fps・アイコン・ピンク配色
 
 実機の指摘を受け，保存状態をツールバー外へ移し，画面内の説明を短縮した。素材一覧へfpsを表示し，新規プロジェクトの出力fpsを自動選択にした。手動選択と旧プロジェクトの保存値を保持する。追加のCore4件と，既存の出力形式試験による自動60fps・各手動値の検証を用意した。提供されたロゴを基にしたアイコンと，ライト・ダーク別のピンク配色も組み込んだ。最終候補は`e8b5573`・1.1（ビルド4）で，まだiPadへ更新していない。

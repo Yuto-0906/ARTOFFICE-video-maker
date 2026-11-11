@@ -2,21 +2,21 @@
 
 この手順は，macOS CIで署名ビルドが成功してIPAを取得した後に使う。実行結果は[IOS_PROGRESS.md](IOS_PROGRESS.md)，導入後の確認は[IOS_DEVICE_ACCEPTANCE.md](IOS_DEVICE_ACCEPTANCE.md)に記録する。
 
-2026年10月28日00:59 JST，M4 iPad（`iPad16,5`・OS27.2）へ1.1（ビルド2）を上書きした。現在の導入元は[Azure Run 4](https://dev.azure.com/yuto200596/ios-development/_build/results?buildId=4)，ソース`fe8dfd3f567d4cb40ae366e022797090c4ddbf4a`，IPAは`.cache/ios-signed/azure-build-4/ios-signed/ARTOFFICE-ios-development.ipa`である。macOSでの署名検証，Windowsでの構成・リビジョン・プロファイル照合，端末の`ProfileValidated: true`と編集JSON4ファイルの更新前後の一致を確認した。新しい操作の実機受入は依頼中で，iPhoneの導入は後日対応とする。
+2026年10月28日11:34 JST，M4 iPad（`iPad16,5`・OS27.2）へ1.1（ビルド6）を上書きした。導入元は[Azure Run 11](https://dev.azure.com/yuto200596/ios-development/_build/results?buildId=11)，ソース`f0e5cf2147ba6f9f3ac6ec16444a63a2fbefea25`である。Core29件・署名・アイコンとアセットの検査が通り，端末の`ProfileValidated: true`と2プロジェクトの編集JSON4ファイルの一致を確認した。ユーザーから今回の操作確認に「問題なさそう」と回答を得た。iPhoneの導入は後日対応とする。
 
 ## ビルドとIPAを対応させる
 
-成功した署名ジョブの対象コミット，`ARTOFFICE-ios-development.ipa`，`signing-report.json`を照合する。Azureでは`device`ジョブの`ios-signed`成果物，Codemagicでは`ios-device`の成果物を使う。レポートの`codesignVerified`，Bundle ID，バージョン，リビジョンを確認し，同じビルドのIPAを取得する。ダウンロード先はGit除外済みの`.cache/ios-signed/`などを使う。
+Azureの開始・状態・ログ・ダウンロードは[API操作手順](IOS_AZURE_PIPELINES.md)に従い，通常操作にChromeを使わない。成功した署名ジョブの対象コミット，`ARTOFFICE-ios-development.ipa`，`signing-report.json`を照合する。Azureでは`device`ジョブの`ios-signed`成果物，Codemagicでは`ios-device`の成果物を使う。レポートの`codesignVerified`，Bundle ID，バージョン，リビジョンを確認し，同じビルドのIPAを取得する。ダウンロード先はGit除外済みの`.cache/ios-signed/`などを使う。
 
 アプリのBundle IDは`com.yuto0906.artoffice-video-maker.ios`である。Windows側でも次の構成検査を実行し，SHA-256を記録する。
 
 ```powershell
 python scripts/ios/check-ipa.py `
-  --ipa '.cache/ios-signed/azure-build-4/ios-signed/ARTOFFICE-ios-development.ipa' `
+  --ipa '.cache/ios-signed/azure-build-11/ios-signed/ARTOFFICE-ios-development.ipa' `
   --bundle 'com.yuto0906.artoffice-video-maker.ios'
 ```
 
-今回のSHA-256は`ff8af5fffb1d991436104056e796b8506b2a507289f8f1625a9dd7a69567f1ae`である。この検査は実機用プラットフォーム，識別子，実行ファイル，署名関連ファイル，プロファイルなどの構成を調べる。暗号学的な署名検証はmacOSの`codesign`と，インストール時の端末検証で確認する。埋込みプロファイルも承認済み原本と照合し，対象端末を含むことを確認する。
+今回のSHA-256は`72f377923aee69d210ebb973ba35cd549a2db699996cab410713a50f384af8f2`である。この検査は実機用プラットフォーム，識別子，実行ファイル，署名関連ファイル，プロファイルなどの構成を調べる。暗号学的な署名検証はmacOSの`codesign`と，インストール時の端末検証で確認する。埋込みプロファイルも承認済み原本と照合し，対象端末を含むことを確認する。
 
 ## 接続ツールを用意する
 

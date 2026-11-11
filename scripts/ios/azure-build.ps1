@@ -1,3 +1,4 @@
+#requires -Version 7.0
 param(
     [Parameter(Mandatory)][ValidateSet('start','status','failed-log','download')][string]$Action,
     [ValidateRange(1,2147483647)][int]$BuildId = 1,
@@ -51,7 +52,7 @@ try {
                 $path = Join-Path $evidenceRoot "azure-run-$BuildId-log-$($step.log.id).txt"
                 $log.Content | Set-Content -LiteralPath $path -Encoding utf8
                 Write-Output "Failed step: $($step.name) / saved log: $path"
-                $lines = @($log.Content -split '\r?\n' | Select-String -Pattern 'error:|failed|AssertionError|Traceback|BUILD FAILED|TEST FAILED' -Context 2,3)
+                $lines = @($log.Content -split '\r?\n' | Select-String -Pattern 'error:|AssertionError|Traceback|BUILD FAILED|TEST (EXECUTE )?FAILED' -Context 2,3)
                 $lines | Select-Object -Last 24 | ForEach-Object { $_.ToString() }
             }
         }
