@@ -261,6 +261,7 @@ mod tests {
             source_width: prepared.source_width,
             source_height: prepared.source_height,
             exif_orientation: 1,
+            output_format: Default::default(),
             zoom: 1.0,
             crop: crate::models::CropRectNormalized {
                 x: 0.6,
