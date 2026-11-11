@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -32,7 +32,9 @@ import {
   formatChapterTime,
   formatClock,
   frameToSeconds,
-  isMp4Path,
+  isVideoPath,
+  VIDEO_EXTENSIONS,
+  THUMBNAIL_EXTENSIONS,
   isThumbnailImagePath,
   parentFolderName,
   parseClock,
@@ -194,7 +196,7 @@ export default function App() {
             outFrameExclusive: result.media.frameCount,
             media: result.media,
             joinWithPrevious: false,
-            importError: parsed ? undefined : "ファイル名を「出演順_バンド名.MP4」にしてください。",
+            importError: parsed ? undefined : "ファイル名を「出演順_バンド名.拡張子」にしてください。",
           });
         });
 
@@ -218,7 +220,7 @@ export default function App() {
     const selection = await open({
       multiple: true,
       directory: false,
-      filters: [{ name: "MP4動画", extensions: ["mp4", "MP4"] }],
+      filters: [{ name: "動画", extensions: VIDEO_EXTENSIONS.flatMap((extension) => [extension, extension.toUpperCase()]) }],
     });
     if (Array.isArray(selection)) await addVideoPaths(selection);
     else if (selection) await addVideoPaths([selection]);
@@ -229,9 +231,9 @@ export default function App() {
     if (!folder || Array.isArray(folder)) return;
     setBusy(true);
     try {
-      const paths = await invoke<string[]>("list_mp4_files", { folder });
+      const paths = await invoke<string[]>("list_video_files", { folder });
       await addVideoPaths(paths);
-      if (paths.length === 0) setNotice("選択したフォルダーにMP4ファイルがありませんでした。");
+      if (paths.length === 0) setNotice("選択したフォルダーに対応する動画ファイルがありませんでした。");
     } catch (reason) {
       setError(errorMessage(reason));
     } finally {
@@ -334,7 +336,7 @@ export default function App() {
     if (!folder || Array.isArray(folder)) return;
     setBusy(true);
     try {
-      const candidates = await invoke<string[]>("list_mp4_files", { folder });
+      const candidates = await invoke<string[]>("list_video_files", { folder });
       const byName = new Map(candidates.map((path) => [basename(path).toLocaleLowerCase(), path]));
       const changed = project.clips.map((clip) => ({
         ...clip,
@@ -441,7 +443,7 @@ export default function App() {
         crop: centeredCropForAspect(prepared.sourceWidth, prepared.sourceHeight),
         zoom: 1,
       };
-      updateProject((current) => ({ ...current, thumbnail }));
+      updateProject((current) => ({ ...current, thumbnail: { ...thumbnail, outputFormat: current.thumbnail?.outputFormat ?? "jpg" } }));
       setNotice("集合写真を読み込みました。枠内をドラッグして調整してください。");
     } catch (reason) {
       setError(errorMessage(reason));
@@ -454,7 +456,7 @@ export default function App() {
     const selection = await open({
       multiple: false,
       directory: false,
-      filters: [{ name: "集合写真", extensions: ["jpg", "jpeg", "png", "heic", "heif", "JPG", "PNG", "HEIC"] }],
+      filters: [{ name: "画像", extensions: THUMBNAIL_EXTENSIONS.flatMap((extension) => [extension, extension.toUpperCase()]) }],
     });
     if (!selection || Array.isArray(selection)) return;
     await loadThumbnailPath(selection);
@@ -467,9 +469,9 @@ export default function App() {
       return;
     }
     if (step === "import") {
-      const videos = paths.filter(isMp4Path);
+      const videos = paths.filter(isVideoPath);
       if (videos.length === 0) {
-        setError("MP4ファイルをドロップしてください。");
+        setError("対応する動画ファイルをドロップしてください（MP4，MKV，MOV，WebM，MTS，M2TS，AVI，WMV）。");
         return;
       }
       await addVideoPaths(videos);
@@ -478,7 +480,7 @@ export default function App() {
     if (step === "thumbnail") {
       const images = paths.filter(isThumbnailImagePath);
       if (images.length === 0) {
-        setError("JPG，PNG，HEIC，HEIFのいずれかをドロップしてください。");
+        setError("対応する画像をドロップしてください（JPEG，PNG，HEIC，HEIF，WebP，TIFF，BMP，AVIF，GIF）。");
         return;
       }
       if (images.length > 1) {
@@ -494,7 +496,7 @@ export default function App() {
     const unlisten = getCurrentWindow().onDragDropEvent(({ payload }) => {
       if (payload.type === "enter") {
         const acceptsDrop = step === "import"
-          ? payload.paths.some(isMp4Path)
+          ? payload.paths.some(isVideoPath)
           : step === "thumbnail" && payload.paths.some(isThumbnailImagePath);
         setFileDragActive(!busy && acceptsDrop);
       } else if (payload.type === "leave") {
@@ -671,7 +673,7 @@ export default function App() {
           <div className="file-drop-overlay" role="status" aria-live="polite">
             <div>
               <span aria-hidden="true">↓</span>
-              <strong>{step === "import" ? "MP4をドロップして追加" : "画像をドロップして設定"}</strong>
+              <strong>{step === "import" ? "動画をドロップして追加" : "画像をドロップして設定"}</strong>
             </div>
           </div>
         )}
@@ -716,6 +718,7 @@ export default function App() {
             busy={busy}
             onChoose={chooseThumbnail}
             onRemove={() => updateProject((current) => ({ ...current, thumbnail: null }))}
+            onFormat={(outputFormat) => updateProject((current) => ({ ...current, thumbnail: current.thumbnail ? { ...current.thumbnail, outputFormat } : null }))}
             onCropComplete={updateThumbnailCrop}
             onNext={() => setStep("export")}
           />
@@ -828,7 +831,7 @@ function ImportStep(props: ImportStepProps) {
       <div className="section-heading">
         <div><span className="eyebrow">STEP 1</span><h1>動画を読み込む</h1></div>
         <div className="heading-actions">
-          <button className="secondary" onClick={props.onChooseFiles} disabled={props.busy}>MP4を選択</button>
+          <button className="secondary" onClick={props.onChooseFiles} disabled={props.busy}>動画を選択</button>
           <button className="primary" onClick={props.onChooseFolder} disabled={props.busy}>フォルダーを選択</button>
         </div>
       </div>
@@ -842,7 +845,7 @@ function ImportStep(props: ImportStepProps) {
         <div className="empty-state">
           <div className="empty-icon">＋</div>
           <h2>ライブ動画を追加してください</h2>
-          <p>MP4をここへドラッグ＆ドロップ</p>
+          <p>動画をここへドラッグ＆ドロップ</p>
         </div>
       ) : (
         <div className="clip-table-wrap">
@@ -922,6 +925,54 @@ function ImportStep(props: ImportStepProps) {
   );
 }
 
+interface PreviewVideoProps {
+  sourcePath: string;
+  preferPreview: boolean;
+  playerRef: RefObject<HTMLVideoElement | null>;
+  onLoadedMetadata: () => void;
+  onTimeUpdate: (event: React.SyntheticEvent<HTMLVideoElement>) => void;
+  onError: (message: string) => void;
+}
+
+function PreviewVideo({ sourcePath, preferPreview, playerRef, onLoadedMetadata, onTimeUpdate, onError }: PreviewVideoProps) {
+  const [needsPreview, setNeedsPreview] = useState(preferPreview);
+  const [previewPath, setPreviewPath] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (!needsPreview) return;
+    let active = true;
+    invoke<string>("prepare_video_preview", { sourcePath }).then((path) => {
+      if (active) setPreviewPath(path);
+    }).catch((reason) => {
+      if (active) {
+        setFailed(true);
+        onError(errorMessage(reason));
+      }
+    });
+    return () => { active = false; };
+  }, [needsPreview, sourcePath]);
+
+  return <>
+    <video
+      ref={playerRef}
+      src={needsPreview ? (previewPath ? convertFileSrc(previewPath) : undefined) : convertFileSrc(sourcePath)}
+      controls
+      preload="metadata"
+      onLoadedMetadata={onLoadedMetadata}
+      onTimeUpdate={onTimeUpdate}
+      onError={() => {
+        if (!needsPreview) setNeedsPreview(true);
+        else if (previewPath) {
+          setFailed(true);
+          onError("プレビューを再生できませんでした。");
+        }
+      }}
+    />
+    {needsPreview && !previewPath && <div className="preview-status" role="status">{failed ? "プレビューを準備できませんでした。" : "プレビューを準備中…"}</div>}
+  </>;
+}
+
 interface TrimStepProps {
   clips: ClipV1[];
   selected: ClipV1;
@@ -989,12 +1040,12 @@ function TrimStep({ clips, selected, onSelect, onUpdate, onNext, onError }: Trim
         </div>
 
         <div className="video-stage">
-          <video
+          <PreviewVideo
             key={selected.sourcePath}
-            ref={playerRef}
-            src={convertFileSrc(selected.sourcePath)}
-            controls
-            preload="metadata"
+            playerRef={playerRef}
+            sourcePath={selected.sourcePath}
+            preferPreview={!/\.(mp4|mov)$/i.test(selected.sourcePath) || selected.media.videoCodec !== "h264" || selected.media.pixelFormat !== "yuv420p" || (selected.media.hasAudio && selected.media.audioCodec !== "aac")}
+            onError={onError}
             onLoadedMetadata={() => seek(inSeconds)}
             onTimeUpdate={(event) => {
               const video = event.currentTarget;
@@ -1077,11 +1128,12 @@ interface ThumbnailStepProps {
   busy: boolean;
   onChoose: () => void;
   onRemove: () => void;
+  onFormat: (format: "jpg" | "png") => void;
   onCropComplete: (area: Area, zoom: number) => void;
   onNext: () => void;
 }
 
-function ThumbnailStep({ thumbnail, busy, onChoose, onRemove, onCropComplete, onNext }: ThumbnailStepProps) {
+function ThumbnailStep({ thumbnail, busy, onChoose, onRemove, onFormat, onCropComplete, onNext }: ThumbnailStepProps) {
   const [crop, setCrop] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(thumbnail?.zoom ?? 1);
   const initialCroppedArea = useMemo<Area | undefined>(() => thumbnail ? {
@@ -1125,7 +1177,7 @@ function ThumbnailStep({ thumbnail, busy, onChoose, onRemove, onCropComplete, on
 
       {!thumbnail ? (
         <div className="empty-state thumbnail-empty">
-          <div className="empty-icon photo">▧</div><strong className="drop-prompt">画像をここへドラッグ＆ドロップ</strong><p>JPG，PNG，HEIC，HEIFに対応します。選択しない場合，サムネイルは出力しません。</p>
+          <div className="empty-icon photo">▧</div><strong className="drop-prompt">画像をここへドラッグ＆ドロップ</strong><p>JPEG，PNG，HEIC，HEIF，WebP，TIFF，BMP，AVIF，GIFに対応します。選択しない場合，サムネイルは出力しません。</p>
           <button className="secondary" onClick={onChoose} disabled={busy}>{busy ? "画像を処理中…" : "写真を選択"}</button>
         </div>
       ) : (
@@ -1149,6 +1201,7 @@ function ThumbnailStep({ thumbnail, busy, onChoose, onRemove, onCropComplete, on
             <h2>切り抜き設定</h2>
             <div className="source-card"><span>元画像</span><strong title={thumbnail.sourcePath}>{basename(thumbnail.sourcePath)}</strong><small>{thumbnail.sourceWidth}×{thumbnail.sourceHeight}</small></div>
             <label className="field"><span>拡大率</span><input type="range" min={1} max={4} step={0.01} value={zoom} onChange={(event) => handleZoomChange(Number(event.target.value))} onPointerUp={commitCrop} onKeyUp={commitCrop} onBlur={commitCrop} /><small>{zoom.toFixed(2)}倍</small></label>
+            <label className="field"><span>保存形式</span><select value={thumbnail.outputFormat ?? "jpg"} onChange={(event) => onFormat(event.target.value as "jpg" | "png")} disabled={busy}><option value="jpg">JPEG（写真向け）</option><option value="png">PNG（文字・ロゴ向け）</option></select></label>
             <p className="hint">写真をドラッグして全員が枠内に入るよう調整します。出力時に高品質補間を行います。</p>
             <button className="danger text" onClick={onRemove}>集合写真を削除</button>
           </aside>
@@ -1200,7 +1253,7 @@ function ExportStep(props: ExportStepProps) {
             <ul className="output-file-list">
               <li><span>動画</span><code>{safeEventName(props.project.eventName)}.mp4</code></li>
               <li><span>チャプター</span><code>{safeEventName(props.project.eventName)}_チャプター.txt</code></li>
-              {props.project.thumbnail && <li><span>サムネイル</span><code>{safeEventName(props.project.eventName)}_サムネイル.jpg</code></li>}
+              {props.project.thumbnail && <li><span>サムネイル</span><code>{safeEventName(props.project.eventName)}_サムネイル.{props.project.thumbnail.outputFormat ?? "jpg"}</code></li>}
             </ul>
           </div>
           <div className="settings-card summary-stats">

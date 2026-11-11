@@ -12,7 +12,7 @@ FFmpegは別プロセスとして映像・音声処理に使用します。Windo
 
 ## ImageMagick 7.1.2-30
 
-Windows版のHEIC／HEIF画像のデコードに，HEIC delegateを内蔵したImageMagick portable Q16-HDRI x64を使用します。ImageMagick Licenseで提供されます。`licenses/ImageMagick-LICENSE.txt`と`licenses/ImageMagick-NOTICE.txt`を参照してください。Mac版はmacOS標準のImageIOを使用し，ImageMagickを同梱しません。
+Windows版のHEIC／HEIF／AVIF画像のデコードに，HEIC delegateを内蔵したImageMagick portable Q16-HDRI x64を使用します。ImageMagick Licenseで提供されます。`licenses/ImageMagick-LICENSE.txt`と`licenses/ImageMagick-NOTICE.txt`を参照してください。Mac版はmacOS標準のImageIOを使用し，ImageMagickを同梱しません。
 
 - プロジェクト：https://imagemagick.org/
 - ソース：https://github.com/ImageMagick/ImageMagick/tree/7.1.2-30
@@ -37,3 +37,7 @@ Mac版のFFmpeg・ffprobeは公式のFFmpeg 8.1.2からビルドします。libx
 ## アプリケーションライブラリ
 
 アプリ本体はTauri，React，TypeScript，Rustおよび各エコシステムのライブラリを利用しています。各ライブラリのライセンスは`package-lock.json`と`src-tauri/Cargo.lock`で固定されたパッケージの配布元を参照してください。アプリ本体の著作権はARTOFFICEに帰属します。
+
+## iOS版のFFmpegKit
+
+iOS版では，Apple標準機能で再生できない動画の取り込みと，標準機能で読めない画像のデコードにFFmpegKitを使用する。Swift Packageの参照先を固定しており，公開ソースは`https://github.com/jaywcjlove/ffmpeg-kit/tree/0bd85df8f9693061f6f979414662baaf876a3e20`にある。対応するライセンスは`ios/Resources/FFmpegKit-LICENSE.txt`に同梱する。FFmpeg本体とラッパーの再ビルド手順は同リポジトリのREADMEとappleスクリプトに従う。

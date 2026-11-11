@@ -84,6 +84,8 @@ struct PhotoCrop: Codable, Equatable {
     var centerX = 0.5
     var centerY = 0.5
     var zoom = 1.0
+    var outputFormat: ThumbnailOutputFormat?
+    var resolvedOutputFormat: ThumbnailOutputFormat { outputFormat ?? .jpeg }
     func rect(width: Double, height: Double) -> (x: Double, y: Double, width: Double, height: Double) {
         let w = min(width, height * 16 / 9) / min(5, max(1, zoom)), h = w * 9 / 16
         return (min(max(0, centerX * width - w / 2), width - w),

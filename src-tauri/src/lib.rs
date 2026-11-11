@@ -2,6 +2,7 @@
 mod macos_image;
 mod media;
 mod models;
+mod preview;
 mod project;
 mod render;
 mod thumbnail;
@@ -29,8 +30,13 @@ fn tool_status() -> ToolStatus {
 }
 
 #[tauri::command]
-fn list_mp4_files(folder: String) -> Result<Vec<String>, String> {
-    media::mp4_files(&folder).map_err(command_error)
+fn list_video_files(folder: String) -> Result<Vec<String>, String> {
+    media::video_files(&folder).map_err(command_error)
+}
+
+#[tauri::command]
+async fn prepare_video_preview(source_path: String) -> Result<String, String> {
+    preview::prepare(&source_path).await.map_err(command_error)
 }
 
 #[tauri::command]
@@ -84,6 +90,7 @@ pub fn run() {
         .setup(|app| {
             tools::initialize_resource_directory(app.path().resource_dir()?);
             thumbnail::cleanup_cache();
+            preview::cleanup_cache();
             render::cleanup_cache();
             let window = app
                 .get_webview_window("main")
@@ -93,7 +100,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             tool_status,
-            list_mp4_files,
+            list_video_files,
+            prepare_video_preview,
             probe_media,
             read_project,
             write_project,

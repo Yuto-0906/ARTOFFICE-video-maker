@@ -73,8 +73,13 @@ struct ThumbnailView: View {
                     Slider(value: Binding(get: { store.project.thumbnail?.zoom ?? 1 }, set: { value in
                         if let current = store.project.thumbnail { store.project.thumbnail = current.zoomed(to: value, width: image.size.width, height: image.size.height) }
                     }), in: 1...5).accessibilityLabel("写真の拡大率")
+                    Picker("保存形式", selection: Binding(get: { store.project.thumbnail?.resolvedOutputFormat ?? .jpeg }, set: { value in
+                        store.project.thumbnail?.outputFormat = value
+                    })) {
+                        ForEach(ThumbnailOutputFormat.allCases, id: \.self) { value in Text(value.label).tag(value) }
+                    }.pickerStyle(.segmented).accessibilityLabel("サムネイルの保存形式")
                     Button { Task { await shareThumbnail() } } label: {
-                        Label(preparingShare ? "JPEGを準備しています" : "サムネイルを保存・共有", systemImage: "square.and.arrow.up")
+                        Label(preparingShare ? "画像を準備しています" : "サムネイルを保存・共有", systemImage: "square.and.arrow.up")
                             .frame(maxWidth: .infinity, minHeight: 44)
                     }.buttonStyle(.borderedProminent).disabled(preparingShare)
                     Button("この写真を使わない", role: .destructive) { store.project.thumbnail = nil; self.image = nil }.frame(minHeight: 44)
@@ -92,7 +97,7 @@ struct ThumbnailView: View {
                 try Task.checkCancellation(); image = decoded
             } catch is CancellationError {} catch { store.message = error.localizedDescription }
         }
-        .fileImporter(isPresented: $picker, allowedContentTypes: [.image], allowsMultipleSelection: false) { result in
+        .fileImporter(isPresented: $picker, allowedContentTypes: [.image] + MediaFormats.imageExtensions.compactMap { UTType(filenameExtension: $0) }, allowsMultipleSelection: false) { result in
             switch result { case .success(let urls): if let url = urls.first { Task { await store.importPhoto(url) } }
             case .failure(let error): store.message = error.localizedDescription }
         }
@@ -122,7 +127,7 @@ struct ThumbnailView: View {
             for old in try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.contentModificationDateKey]) {
                 if let date = try? old.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate, date < Date().addingTimeInterval(-86400) { try? FileManager.default.removeItem(at: old) }
             }
-            let output = root.appendingPathComponent("thumbnail-\(UUID().uuidString).jpg")
+            let output = root.appendingPathComponent("thumbnail-\(UUID().uuidString).\(crop.resolvedOutputFormat.rawValue)")
             try await Task.detached { try MediaFiles.exportPhoto(crop, directory: directory, output: output) }.value
             shareURL = output; sharing = true
         } catch { store.message = error.localizedDescription }

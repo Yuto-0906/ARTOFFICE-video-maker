@@ -56,6 +56,7 @@ export interface ThumbnailV1 {
   exifOrientation: number;
   crop: CropRectNormalized;
   zoom: number;
+  outputFormat?: "jpg" | "png";
 }
 
 export interface ProjectV1 {

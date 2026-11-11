@@ -65,7 +65,7 @@ fn fingerprint(path: &Path) -> SourceFingerprint {
     }
 }
 
-async fn probe_one(path: &Path) -> Result<MediaInfo> {
+pub(crate) async fn probe_one(path: &Path) -> Result<MediaInfo> {
     anyhow::ensure!(path.is_file(), "元動画が見つかりません。");
     let ffprobe = tools::ffprobe().context("FFprobeが見つかりません。")?;
     let mut command = Command::new(ffprobe);
@@ -219,7 +219,9 @@ pub async fn probe_paths(paths: Vec<String>) -> Vec<ProbeResult> {
     results
 }
 
-pub fn mp4_files(folder: &str) -> Result<Vec<String>> {
+pub const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mkv", "mov", "webm", "mts", "m2ts", "avi", "wmv"];
+
+pub fn video_files(folder: &str) -> Result<Vec<String>> {
     let directory = Path::new(folder);
     anyhow::ensure!(directory.is_dir(), "フォルダーが見つかりません。");
     let mut paths = fs::read_dir(directory)
@@ -228,7 +230,9 @@ pub fn mp4_files(folder: &str) -> Result<Vec<String>> {
         .filter(|path| {
             path.is_file()
                 && path.extension().is_some_and(|extension| {
-                    extension.to_string_lossy().eq_ignore_ascii_case("mp4")
+                    VIDEO_EXTENSIONS.iter().any(|candidate| {
+                        extension.to_string_lossy().eq_ignore_ascii_case(candidate)
+                    })
                 })
         })
         .collect::<Vec<_>>();
@@ -261,6 +265,31 @@ mod tests {
         assert_eq!(value.numerator, 60000);
         assert_eq!(value.denominator, 1001);
         assert!((value.value() - 59.940_059).abs() < 0.001);
+    }
+
+    #[test]
+    fn lists_mixed_video_formats_in_numeric_order() {
+        let temp = tempfile::tempdir().unwrap();
+        for name in [
+            "10_最後.WMV",
+            "2_二番.mkv",
+            "1_先頭.MOV",
+            "3_三番.webm",
+            "4_四番.MTS",
+            "5_五番.m2ts",
+            "6_六番.avi",
+            "7_七番.MP4",
+            "8_画像.png",
+            "9_偽物.mp4.exe",
+        ] {
+            std::fs::write(temp.path().join(name), []).unwrap();
+        }
+        std::fs::create_dir(temp.path().join("0_フォルダー.mp4")).unwrap();
+        let paths = super::video_files(temp.path().to_str().unwrap()).unwrap();
+        assert_eq!(paths.len(), 8);
+        assert!(paths[0].ends_with("1_先頭.MOV"));
+        assert!(paths[1].ends_with("2_二番.mkv"));
+        assert!(paths[7].ends_with("10_最後.WMV"));
     }
 
     #[tokio::test]

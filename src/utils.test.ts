@@ -9,7 +9,7 @@ import {
   duplicateOrders,
   frameToSeconds,
   formatChapterTime,
-  isMp4Path,
+  isVideoPath,
   isThumbnailImagePath,
   moveClipGroup,
   parseClock,
@@ -22,17 +22,22 @@ import {
 } from "./utils";
 
 describe("ドラッグ＆ドロップの対応形式", () => {
-  it("MP4の大文字・小文字を判定する", () => {
-    expect(isMp4Path(String.raw`C:\動画\1_バンド.MP4`)).toBe(true);
-    expect(isMp4Path(String.raw`C:\動画\1_バンド.mp4`)).toBe(true);
-    expect(isMp4Path(String.raw`C:\動画\1_バンド.mov`)).toBe(false);
+  it("動画の大文字・小文字を判定する", () => {
+    expect(isVideoPath(String.raw`C:\動画\1_バンド.MP4`)).toBe(true);
+    expect(isVideoPath(String.raw`C:\動画\1_バンド.mp4`)).toBe(true);
+    ["mkv", "MOV", "webm", "MTS", "m2ts", "AVI", "wmv"].forEach((extension) => {
+      expect(isVideoPath(`C:/動画/1_バンド.${extension}`)).toBe(true);
+    });
+    ["mp3", "txt", "mp4.exe", ""].forEach((extension) => {
+      expect(isVideoPath(`C:/動画/1_バンド.${extension}`)).toBe(false);
+    });
   });
 
   it("サムネイル用画像の対応形式を判定する", () => {
-    ["jpg", "JPEG", "png", "HEIC", "heif"].forEach((extension) => {
+    ["jpg", "JPEG", "png", "HEIC", "heif", "webp", "TIF", "tiff", "BMP", "avif", "GIF"].forEach((extension) => {
       expect(isThumbnailImagePath(`C:\\写真\\集合写真.${extension}`)).toBe(true);
     });
-    expect(isThumbnailImagePath(String.raw`C:\写真\集合写真.webp`)).toBe(false);
+    expect(isThumbnailImagePath(String.raw`C:\写真\集合写真.svg`)).toBe(false);
   });
 });
 

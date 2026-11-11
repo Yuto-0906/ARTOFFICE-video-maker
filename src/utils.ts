@@ -3,12 +3,19 @@ import type { ClipV1, ParsedFileName, ProjectV1, Rational } from "./types";
 export const OUTPUT_FPS: Rational = { numerator: 60000, denominator: 1001 };
 export const TRANSITION_SECONDS = 0.5;
 
-export function isMp4Path(path: string): boolean {
-  return /\.mp4$/i.test(path);
+export const VIDEO_EXTENSIONS = ["mp4", "mkv", "mov", "webm", "mts", "m2ts", "avi", "wmv"];
+export const THUMBNAIL_EXTENSIONS = ["jpg", "jpeg", "png", "heic", "heif", "webp", "tif", "tiff", "bmp", "avif", "gif"];
+
+function hasExtension(path: string, extensions: string[]): boolean {
+  return extensions.includes(path.split(/[\\/]/).pop()?.split(".").slice(1).pop()?.toLowerCase() ?? "");
+}
+
+export function isVideoPath(path: string): boolean {
+  return hasExtension(path, VIDEO_EXTENSIONS);
 }
 
 export function isThumbnailImagePath(path: string): boolean {
-  return /\.(?:jpe?g|png|heic|heif)$/i.test(path);
+  return hasExtension(path, THUMBNAIL_EXTENSIONS);
 }
 
 export function centeredCropForAspect(width: number, height: number, aspect = 16 / 9) {

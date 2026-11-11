@@ -10,13 +10,20 @@ settings:
     TARGETED_DEVICE_FAMILY: '1,2'
     IPHONEOS_DEPLOYMENT_TARGET: '17.0'
     MARKETING_VERSION: '1.1'
-    CURRENT_PROJECT_VERSION: '6'
+    CURRENT_PROJECT_VERSION: '7'
     CODE_SIGN_STYLE: Automatic
+packages:
+  FFmpegKit:
+    url: https://github.com/jaywcjlove/ffmpeg-kit.git
+    revision: 0bd85df8f9693061f6f979414662baaf876a3e20
 targets:
   ARTOFFICE:
     type: application
     platform: iOS
     sources: [App, Core, Media, Rendering, Resources]
+    dependencies:
+      - package: FFmpegKit
+        product: ffmpegkit
     info:
       path: Info.plist
       properties:
@@ -46,7 +53,11 @@ targets:
   ARTOFFICETests:
     type: bundle.unit-test
     platform: iOS
-    sources: [Tests]
+    sources:
+      - path: Tests
+      - path: ../tests/fixtures
+        type: folder
+        buildPhase: resources
     dependencies:
       - target: ARTOFFICE
     settings:

@@ -217,7 +217,9 @@ import SwiftUI
         guard !busy, !exporting else { return }; busy = true; defer { busy = false }
         let directory = self.directory
         do {
-            project.thumbnail = try await Task.detached { try MediaFiles.importPhoto(url, directory: directory) }.value
+            var imported = try await Task.detached { try MediaFiles.importPhoto(url, directory: directory) }.value
+            imported.outputFormat = project.thumbnail?.outputFormat
+            project.thumbnail = imported
             try await flush()
         } catch { message = error.localizedDescription }
     }

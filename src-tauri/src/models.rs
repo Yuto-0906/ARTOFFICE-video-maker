@@ -94,6 +94,25 @@ pub struct ThumbnailV1 {
     pub exif_orientation: u32,
     pub crop: CropRectNormalized,
     pub zoom: f64,
+    #[serde(default)]
+    pub output_format: ThumbnailFormat,
+}
+
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThumbnailFormat {
+    #[default]
+    Jpg,
+    Png,
+}
+
+impl ThumbnailFormat {
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Jpg => "jpg",
+            Self::Png => "png",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

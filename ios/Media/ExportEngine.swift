@@ -207,7 +207,7 @@ enum ExportEngine {
         let final = outputDirectory.appendingPathComponent(stem + suffix + ".mp4")
         let partial = outputDirectory.appendingPathComponent("." + stem + suffix + ".partial.mp4")
         let chapters = outputDirectory.appendingPathComponent(stem + suffix + "_チャプター.txt")
-        let photo = outputDirectory.appendingPathComponent(stem + suffix + "_サムネイル.jpg")
+        let photo = outputDirectory.appendingPathComponent(stem + suffix + "_サムネイル." + (project.thumbnail?.resolvedOutputFormat.rawValue ?? "jpg"))
         var generated: [URL] = []
         do {
             try await mux(chunks: chunks, job: job, output: partial, control: control)

@@ -173,10 +173,12 @@ pub fn output_paths_for(request: &RenderRequest) -> Result<OutputPaths> {
     let stem = safe_stem(&request.event_name);
     let video = directory.join(format!("{stem}.mp4"));
     let chapters = directory.join(format!("{stem}_チャプター.txt"));
-    let thumbnail = request
-        .thumbnail
-        .as_ref()
-        .map(|_| directory.join(format!("{stem}_サムネイル.jpg")));
+    let thumbnail = request.thumbnail.as_ref().map(|thumbnail| {
+        directory.join(format!(
+            "{stem}_サムネイル.{}",
+            thumbnail.output_format.extension()
+        ))
+    });
     let mut existing = Vec::new();
     for path in [&video, &chapters] {
         if path.exists() {
@@ -1133,6 +1135,7 @@ pub(crate) async fn verify_packaged_runtime(directory: &Path) -> Result<()> {
         source_width: prepared.source_width,
         source_height: prepared.source_height,
         exif_orientation: 1,
+        output_format: Default::default(),
         zoom: 1.0,
         crop: CropRectNormalized {
             x: 0.0,
@@ -1355,6 +1358,41 @@ mod tests {
     }
 
     #[test]
+    fn png_thumbnail_paths_include_existing_file_in_overwrite_check() {
+        use crate::models::{CropRectNormalized, RenderRequest, ThumbnailFormat, ThumbnailV1};
+        let temp = tempfile::tempdir().unwrap();
+        let thumbnail = ThumbnailV1 {
+            source_path: "group.png".into(),
+            preview_path: "preview.jpg".into(),
+            source_width: 96,
+            source_height: 64,
+            exif_orientation: 1,
+            zoom: 1.0,
+            crop: CropRectNormalized {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            output_format: ThumbnailFormat::Png,
+        };
+        let request = RenderRequest {
+            event_name: "ライブ".into(),
+            output_directory: temp.path().to_string_lossy().into_owned(),
+            resolution: Resolution::P1080,
+            clips: vec![],
+            thumbnail: Some(thumbnail),
+            overwrite: false,
+        };
+        let first = super::output_paths_for(&request).unwrap();
+        let path = first.thumbnail.unwrap();
+        assert!(path.ends_with("_サムネイル.png"));
+        fs::write(&path, b"existing").unwrap();
+        let second = super::output_paths_for(&request).unwrap();
+        assert_eq!(second.existing, vec![path]);
+    }
+
+    #[test]
     fn chapters_account_for_crossfade_and_floor_seconds() {
         let clips = vec![clip("MOSHIMO", 20.8), clip("Mrs. GREEN APPLE", 30.2)];
         assert_eq!(
@@ -1438,7 +1476,10 @@ mod tests {
         .into_iter()
         .enumerate()
         {
-            let source = temp.path().join(format!("{}_{}.mp4", index + 1, name));
+            let extension = ["mkv", "mov", "avi"][index];
+            let source = temp
+                .path()
+                .join(format!("{}_{}.{extension}", index + 1, name));
             let status = StdCommand::new(&ffmpeg)
                 .args([
                     "-hide_banner",

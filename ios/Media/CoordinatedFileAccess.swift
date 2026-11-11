@@ -29,7 +29,8 @@ enum FolderVideoImport {
                 try Task.checkCancellation()
                 let values = try file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
                 if values.isSymbolicLink == true { iterator.skipDescendants(); continue }
-                guard values.isRegularFile == true, let type = UTType(filenameExtension: file.pathExtension), type.conforms(to: .movie) else { continue }
+                guard values.isRegularFile == true,
+                      MediaFormats.isVideo(file) || UTType(filenameExtension: file.pathExtension)?.conforms(to: .movie) == true else { continue }
                 videos.append(file)
             }
             if let failure { throw failure }

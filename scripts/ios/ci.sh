@@ -26,6 +26,10 @@ if [[ "${1:-check}" == check ]]; then
   case "${2:-all}" in
     all) ;;
     ui) TEST_SELECTION=(-only-testing:ARTOFFICEUITests/EditorUITests/testEditorNavigationAndSavedProjectSurviveRelaunch) ;;
+    formats) TEST_SELECTION=(-only-testing:ARTOFFICETests/MediaFormatTests
+                             -only-testing:ARTOFFICETests/FolderVideoImportTests
+                             -only-testing:ARTOFFICETests/MediaExportTests/testThumbnailDragExportsTheSelectedPartAtSixteenByNine
+                             -only-testing:ARTOFFICETests/MediaExportTests/testShortRelinkIsRejectedBeforeCopyingMedia) ;;
     media) TEST_SELECTION=(-only-testing:ARTOFFICETests/RuntimePressureTests
                            -only-testing:ARTOFFICETests/FolderVideoImportTests
                            -only-testing:ARTOFFICETests/MediaExportTests/testClipPlaybackActivatesMovieAudioAndUsesSingleToggle
@@ -109,5 +113,5 @@ elif [[ "${1:-}" == device ]]; then
   (cd ios && swift test) 2>&1 | tee ios/build/core-tests.log
   python3 scripts/ios/sign.py
 else
-  echo 'Usage: ci.sh check [all|media|storage|ui]|device' >&2; exit 2
+  echo 'Usage: ci.sh check [all|media|storage|ui|formats]|device' >&2; exit 2
 fi

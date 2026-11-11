@@ -79,28 +79,37 @@ enum MediaFiles {
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         try Task.checkCancellation()
         let original = url.lastPathComponent
-        let readable: URL
-        if ownedTemporary { readable = url } else { readable = try CoordinatedFileAccess.prepare(url) }
+        let originalURL: URL
+        if ownedTemporary { originalURL = url } else { originalURL = try CoordinatedFileAccess.prepare(url) }
+        let originalValues = try originalURL.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+        let origin = selectionIdentity ?? "file:\(url.standardizedFileURL.path):\(Int64(originalValues.fileSize ?? 0)):\(originalValues.contentModificationDate?.timeIntervalSince1970 ?? 0)"
+        let identity = SHA256.hash(data: Data(origin.utf8)).map { String(format: "%02x", $0) }.joined()
+        guard !existingIDs.contains(identity) else { throw AppError.message("同じ素材は既に取り込まれています。") }
+        var readable = originalURL
+        var conversionDirectory: URL?
+        defer { if let conversionDirectory { try? FileManager.default.removeItem(at: conversionDirectory) } }
+        if !((try? await MediaConversion.isPlayable(originalURL)) ?? false) {
+            let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            conversionDirectory = temporary
+            try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
+            readable = temporary.appendingPathComponent("converted.mp4")
+            try await MediaConversion.normalize(originalURL, output: readable, storage: directory, minimumDuration: minimumDuration)
+        }
         let metadata = try await probe(readable, relativePath: nil, bookmark: nil)
         guard metadata.duration >= minimumDuration else {
             throw AppError.message("元のカット範囲より短い動画です。対応する素材を選んでください。")
         }
         var source = metadata
-        // Identify the selected asset，rather than treating a partial content hash as proof
-        // that distinct concert recordings are identical. No full-file hash is needed.
-        let origin = selectionIdentity ?? "file:\(url.standardizedFileURL.path):\(metadata.byteCount):\(metadata.modifiedAt?.timeIntervalSince1970 ?? 0)"
-        let identity = SHA256.hash(data: Data(origin.utf8)).map { String(format: "%02x", $0) }.joined()
-        guard !existingIDs.contains(identity) else { throw AppError.message("同じ素材は既に取り込まれています。") }
         source.importIdentity = identity
-        if copy {
+        if copy || conversionDirectory != nil {
             let media = directory.appendingPathComponent("Media", isDirectory: true)
             try FileManager.default.createDirectory(at: media, withIntermediateDirectories: true)
-            try requireSpace((ownedTemporary ? 0 : metadata.byteCount) + 100_000_000, at: media)
-            let relative = "Media/\(UUID().uuidString).\(url.pathExtension.lowercased())"
+            try requireSpace((ownedTemporary || conversionDirectory != nil ? 0 : metadata.byteCount) + 100_000_000, at: media)
+            let relative = "Media/\(UUID().uuidString).\(readable.pathExtension.lowercased())"
             let dest = directory.appendingPathComponent(relative)
             do {
-                if ownedTemporary { try FileManager.default.moveItem(at: url, to: dest) }
-                else { try CoordinatedFileAccess.read(url) { try FileManager.default.copyItem(at: $0, to: dest) } }
+                if ownedTemporary || conversionDirectory != nil { try FileManager.default.moveItem(at: readable, to: dest) }
+                else { try CoordinatedFileAccess.read(originalURL) { try FileManager.default.copyItem(at: $0, to: dest) } }
                 try Task.checkCancellation()
             }
             catch { try? FileManager.default.removeItem(at: dest); throw error }
@@ -116,23 +125,31 @@ enum MediaFiles {
         source.fileName = original
         return Clip(source: source, bandName: Naming.parse(original)?.band ?? (original as NSString).deletingPathExtension)
     }
-    static func photo(_ url: URL, maxPixels: Int = 4096) throws -> UIImage {
+    private static func imageIOPhoto(_ url: URL, maxPixels: Int) -> UIImage? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
                 kCGImageSourceCreateThumbnailWithTransform: true,
                 kCGImageSourceThumbnailMaxPixelSize: maxPixels,
                 kCGImageSourceShouldCacheImmediately: true
-              ] as CFDictionary) else { throw AppError.message("写真を読み込めませんでした。") }
+              ] as CFDictionary) else { return nil }
         return UIImage(cgImage: cgImage)
+    }
+    static func photo(_ url: URL, maxPixels: Int = 4096) throws -> UIImage {
+        if let image = imageIOPhoto(url, maxPixels: maxPixels) { return image }
+        let converted = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".png")
+        defer { try? FileManager.default.removeItem(at: converted) }
+        try MediaConversion.decodeImage(url, output: converted, maxPixels: maxPixels)
+        guard let image = imageIOPhoto(converted, maxPixels: maxPixels) else { throw AppError.message("写真を読み込めませんでした。") }
+        return image
     }
     static func importPhoto(_ url: URL, directory: URL) throws -> PhotoCrop {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         let image = try CoordinatedFileAccess.read(url) { try photo($0) }
-        let relative = "Media/\(UUID().uuidString).jpg"
+        let relative = "Media/\(UUID().uuidString).png"
         try FileManager.default.createDirectory(at: directory.appendingPathComponent("Media"), withIntermediateDirectories: true)
-        guard let data = image.jpegData(compressionQuality: 0.95) else { throw AppError.message("写真の保存に失敗しました。") }
+        guard let data = image.pngData() else { throw AppError.message("写真の保存に失敗しました。") }
         try requireSpace(Int64(data.count) + 10_000_000, at: directory)
         try data.write(to: directory.appendingPathComponent(relative), options: .atomic)
         return PhotoCrop(relativePath: relative)
@@ -145,7 +162,8 @@ enum MediaFiles {
             image.draw(in: CGRect(x: -rect.x * 1920 / rect.width, y: -rect.y * 1080 / rect.height,
                                   width: image.size.width * 1920 / rect.width, height: image.size.height * 1080 / rect.height))
         }
-        guard let data = result.jpegData(compressionQuality: 0.94) else { throw AppError.message("サムネイルを作成できませんでした。") }
+        let encoded = crop.resolvedOutputFormat == .png ? result.pngData() : result.jpegData(compressionQuality: 0.94)
+        guard let data = encoded else { throw AppError.message("サムネイルを作成できませんでした。") }
         try data.write(to: output, options: .atomic)
     }
 }

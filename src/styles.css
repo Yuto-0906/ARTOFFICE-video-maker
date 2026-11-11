@@ -264,3 +264,5 @@ input { width: 100%; border: 1px solid var(--border); border-radius: 9px; paddin
   .frame-controls { grid-column: 1 / -1; grid-row: 2; grid-template-columns: repeat(4, 1fr); }
   .export-grid { grid-template-columns: 1fr; }
 }
+
+.preview-status { position: absolute; inset: 0; display: grid; place-items: center; background: #090a0c; color: #e8edf5; font-size: 13px; }

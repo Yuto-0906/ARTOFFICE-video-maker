@@ -8,6 +8,7 @@ _tool-downloads/
 .tool-cache/
 *.partial.mp4
 *.partial.jpg
+*.partial.png
 *.partial.txt
 *.aov-backup-*
 *.log

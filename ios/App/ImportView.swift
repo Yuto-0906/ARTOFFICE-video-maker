@@ -13,7 +13,8 @@ private struct MediaDocumentPicker: UIViewControllerRepresentable {
     let cancelled: () -> Void
     func makeCoordinator() -> Coordinator { Coordinator(selected: selected, cancelled: cancelled) }
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: request.folder ? [.folder] : [.movie], asCopy: false)
+        let types: [UTType] = [.movie] + MediaFormats.videoExtensions.compactMap { UTType(filenameExtension: $0) }
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: request.folder ? [.folder] : types, asCopy: false)
         picker.allowsMultipleSelection = request.multiple; picker.shouldShowFileExtensions = true
         picker.delegate = context.coordinator
         return picker
