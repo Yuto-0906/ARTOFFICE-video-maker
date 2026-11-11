@@ -6,7 +6,7 @@ parameters:
     displayName: Verification or registered-device IPA
     type: string
     default: all
-    values: [all, media, storage, ui, device]
+    values: [all, media, storage, ui, formats, device]
 
 # Microsoft's standard free macOS pool currently supplies this Intel image.
 # Keep the SDK choice explicit; physical iPad acceptance remains on iPadOS 27.0.1.
