@@ -24,6 +24,10 @@ targets:
     dependencies:
       - package: FFmpegKit
         product: ffmpegkit
+    postBuildScripts:
+      - name: Correct FFmpeg CoreMedia linkage
+        script: bash "$SRCROOT/../scripts/ios/fix-coremedia-linkage.sh"
+        basedOnDependencyAnalysis: false
     info:
       path: Info.plist
       properties:

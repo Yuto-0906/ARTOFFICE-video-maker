@@ -99,6 +99,10 @@ PY
       OVERALL_RESULT=1
       grep -n -A 5 -B 2 -E 'error:|failed|TEST FAILED' "ios/build/${FAMILY}-tests.log" || true
       tail -n 45 "ios/build/${FAMILY}-tests.log"
+      xcrun xcresulttool export diagnostics --path "ios/build/${FAMILY}.xcresult" --output-path "ios/build/${FAMILY}-diagnostics" \
+        > "ios/build/${FAMILY}-diagnostics.log" 2>&1 || true
+      grep -R -n -I -m 4 -E 'dyld\[|Symbol not found|Library not loaded|Expected in:' "ios/build/${FAMILY}-diagnostics" \
+        | head -n 20 || true
     fi
     if [[ -d "ios/build/${FAMILY}.xcresult" ]]; then
       xcrun xcresulttool export attachments --path "ios/build/${FAMILY}.xcresult" --output-path "ios/build/${FAMILY}-screenshots" \

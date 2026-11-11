@@ -23,10 +23,14 @@ jobs:
         strategy:
           maxParallel: 1
           matrix:
-            iPhone:
-              deviceFamily: iPhone
-            iPad:
-              deviceFamily: iPad
+            ${{ if eq(parameters.task, 'formats') }}:
+              iPhoneAndiPad:
+                deviceFamily: all
+            ${{ else }}:
+              iPhone:
+                deviceFamily: iPhone
+              iPad:
+                deviceFamily: iPad
         steps:
           - checkout: self
             persistCredentials: false
