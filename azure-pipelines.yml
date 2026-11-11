@@ -7,6 +7,10 @@ parameters:
     type: string
     default: all
     values: [all, media, storage, ui, formats, device]
+  - name: reuseCoreTests
+    displayName: Reuse passed tests only when Core sources are unchanged
+    type: boolean
+    default: false
 
 # Microsoft's standard free macOS pool currently supplies this Intel image.
 # Keep the SDK choice explicit; physical iPad acceptance remains on iPadOS 27.0.1.
@@ -39,6 +43,8 @@ jobs:
             env:
               ARTOFFICE_CHECK_SELECTION: ${{ parameters.task }}
               ARTOFFICE_TEST_FAMILY: $(deviceFamily)
+              ${{ if eq(parameters.reuseCoreTests, true) }}:
+                ARTOFFICE_SKIP_CORE_TESTS: '1'
           - task: CopyFiles@2
             condition: always()
             inputs:
