@@ -57,4 +57,23 @@ final class FrameRateSelectionTests: XCTestCase {
         project.frameRate = .fps60
         XCTAssertEqual(automatic, try identity(project))
     }
+    func testAutomaticResolutionTracksFirstSourceAndLegacyKeepsPreset() throws {
+        var project = Project()
+        var first = clip(30), second = clip(60)
+        first.source.width = 1280; first.source.height = 720
+        second.source.width = 3840; second.source.height = 2160
+        project.clips = [first, second]
+        XCTAssertEqual(project.outputSize, OutputSize(width: 1280, height: 720, bitrate: 6_666_666))
+        project.moveGroup(1, by: -1)
+        XCTAssertEqual(project.outputSize, OutputSize(width: 3840, height: 2160, bitrate: 60_000_000))
+        project.resolution = .quadHD; project.matchesSourceResolution = false
+        XCTAssertEqual(project.outputSize.width, 2560)
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(project)) as? [String: Any])
+        legacy.removeValue(forKey: "matchesSourceResolution")
+        let reopened = try JSONDecoder().decode(Project.self, from: JSONSerialization.data(withJSONObject: legacy))
+        XCTAssertNil(reopened.matchesSourceResolution)
+        XCTAssertEqual(reopened.outputSize.width, 2560)
+        let automatic = try JSONDecoder().decode(Project.self, from: JSONEncoder().encode(Project()))
+        XCTAssertEqual(automatic.matchesSourceResolution, true)
+    }
 }

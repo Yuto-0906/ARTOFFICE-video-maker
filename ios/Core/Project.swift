@@ -21,6 +21,12 @@ enum Resolution: String, Codable, CaseIterable, Identifiable {
     var bitrate: Int { self == .fullHD ? 15_000_000 : 30_000_000 }
 }
 
+struct OutputSize: Codable, Equatable {
+    var width: Int
+    var height: Int
+    var bitrate: Int
+}
+
 enum FrameRate: String, Codable, CaseIterable, Identifiable {
     case ntsc24 = "23.976", fps24 = "24", fps25 = "25"
     case ntsc30 = "29.97", fps30 = "30", fps50 = "50", ntsc60 = "59.94", fps60 = "60"
@@ -100,6 +106,14 @@ struct Project: Codable, Identifiable, Equatable {
     var modifiedAt = Date()
     var clips: [Clip] = []
     var resolution: Resolution = .fullHD
+    var matchesSourceResolution: Bool? = true
+    var outputSize: OutputSize {
+        if matchesSourceResolution == true, let source = clips.first?.source {
+            let rate = min(80_000_000, max(4_000_000, Int(15_000_000.0 * Double(source.width) * Double(source.height) / (1920 * 1080))))
+            return OutputSize(width: source.width, height: source.height, bitrate: rate)
+        }
+        return OutputSize(width: resolution.width, height: resolution.height, bitrate: resolution.bitrate)
+    }
     var frameRate: FrameRate = .fps30
     // Missing in older projects: preserve their saved manual output setting.
     var matchesSourceFrameRate: Bool? = true

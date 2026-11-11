@@ -49,9 +49,9 @@ enum CompositionBuilder {
         var bandStart: Int64 = 0, bandName = ""
         // Only the preview opts into a smaller render target. Export always uses
         // the project's selected size and the same timing，fades and title logic.
-        let height = previewHeight.map { max(180, min(project.resolution.height, $0)) } ?? project.resolution.height
-        let size = previewHeight == nil ? CGSize(width: project.resolution.width, height: height)
-            : CGSize(width: height * 16 / 9, height: height)
+        let height = previewHeight.map { max(180, min(project.outputSize.height, $0)) } ?? project.outputSize.height
+        let size = previewHeight == nil ? CGSize(width: project.outputSize.width, height: height)
+            : CGSize(width: max(2, Int((Double(height) * Double(project.outputSize.width) / Double(project.outputSize.height) / 2).rounded()) * 2), height: height)
         for segment in timeline.segments {
             try Task.checkCancellation()
             let lease = try SourceLease(source: segment.clip.source, projectDirectory: directory)

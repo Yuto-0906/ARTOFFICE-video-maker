@@ -72,7 +72,10 @@ struct CapacityEstimate {
     let localWorking: Int64
     let destinationWorking: Int64
     init(duration: Int64, resolution: Resolution, separateDestination: Bool) {
-        let bytes = Clock.seconds(duration) * Double(resolution.bitrate + 384_000) / 8
+        self.init(duration: duration, bitrate: resolution.bitrate, separateDestination: separateDestination)
+    }
+    init(duration: Int64, bitrate: Int, separateDestination: Bool) {
+        let bytes = Clock.seconds(duration) * Double(bitrate + 384_000) / 8
         output = Int64(bytes.rounded(.up))
         // Chunks coexist with the final file. Include 20% rate/container headroom and 1 GB spare.
         localWorking = Int64(bytes * (separateDestination ? 1.2 : 2.4)) + 1_000_000_000

@@ -77,15 +77,15 @@ struct ExportReport: Codable {
 }
 
 enum ExportEngine {
-    static let rendererVersion = 6
+    static let rendererVersion = 7
     // All four output frame rates have integral frame durations at 60 kHz.
     // Five-hour movie durations also fit a 32-bit duration field at this scale.
     // 1001/24000 and all other supported frame durations are exact at 120 kHz.
     private static let outputVideoScale: CMTimeScale = 120_000
     static func key(_ project: Project) throws -> String {
-        struct Identity: Encodable { let version: Int; let clips: [Clip]; let resolution: Resolution; let frameRate: FrameRate }
+        struct Identity: Encodable { let version: Int; let clips: [Clip]; let outputSize: OutputSize; let frameRate: FrameRate }
         let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
-        let data = try encoder.encode(Identity(version: rendererVersion, clips: project.clips, resolution: project.resolution, frameRate: project.outputFrameRate))
+        let data = try encoder.encode(Identity(version: rendererVersion, clips: project.clips, outputSize: project.outputSize, frameRate: project.outputFrameRate))
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
     static func run(project: Project, directory: URL, jobsRoot: URL, destination: URL?, control: ExportControl, chunkSeconds: Int = 300,
@@ -100,13 +100,13 @@ enum ExportEngine {
         defer { if scoped { destination?.stopAccessingSecurityScopedResource() } }
         let outputDirectory = destination ?? job.appendingPathComponent("Completed")
         try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
-        let capacity = CapacityEstimate(duration: timeline.duration, resolution: project.resolution, separateDestination: destination != nil)
+        let capacity = CapacityEstimate(duration: timeline.duration, bitrate: project.outputSize.bitrate, separateDestination: destination != nil)
         let journalURL = job.appendingPathComponent("journal.json")
         var journal = (try? JSONDecoder().decode(ExportJournal.self, from: Data(contentsOf: journalURL))) ?? ExportJournal()
         if journal.rendererVersion != rendererVersion { journal = ExportJournal() }
         let clock = Date()
         var report = ExportReport(budget: DeviceBudget.current(), systemVersion: UIDevice.current.systemVersion,
-            metalDevice: MTLCreateSystemDefaultDevice()?.name ?? "unavailable", resolution: project.resolution.rawValue, frameRate: project.outputFrameRate.rawValue)
+            metalDevice: MTLCreateSystemDefaultDevice()?.name ?? "unavailable", resolution: "\(project.outputSize.width)×\(project.outputSize.height)", frameRate: project.outputFrameRate.rawValue)
         let sampler = PerformanceSampler(budget: report.budget)
         defer {
             let sampled = sampler.snapshot()
@@ -175,7 +175,7 @@ enum ExportEngine {
             try? FileManager.default.removeItem(at: partial)
             let start = Date()
             do {
-                try MediaFiles.requireSpace(max(250_000_000, Int64(Clock.seconds(chunk.duration) * Double(project.resolution.bitrate + 384_000) / 8 * 1.2)), at: job)
+                try MediaFiles.requireSpace(max(250_000_000, Int64(Clock.seconds(chunk.duration) * Double(project.outputSize.bitrate + 384_000) / 8 * 1.2)), at: job)
                 try await writeChunk(composition: composition, chunk: chunk, project: project, audioEncoding: audioEncoding, url: partial, control: control) { ticks in
                     progress(Double(min(chunk.end, ticks)) / Double(timeline.duration) * 0.94, "動画を書き出しています（\(chunk.index + 1)/\(chunks.count)）")
                 }
@@ -247,7 +247,7 @@ enum ExportEngine {
         guard let video = try await asset.loadTracks(withMediaType: .video).first,
               !(try await asset.loadTracks(withMediaType: .audio)).isEmpty else { throw AppError.message("出力区間の映像・音声が不足しています。") }
         let size = try await video.load(.naturalSize), fps = try await video.load(.nominalFrameRate)
-        guard Int(size.width) == project.resolution.width, Int(size.height) == project.resolution.height,
+        guard Int(size.width) == project.outputSize.width, Int(size.height) == project.outputSize.height,
               abs(Double(fps) - project.outputFrameRate.value) < 0.05,
               abs(duration.seconds - Clock.seconds(chunk.duration)) < 0.1 else { throw AppError.message("出力区間の形式または長さが一致しません。") }
     }
@@ -275,10 +275,10 @@ enum ExportEngine {
         let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
         writer.shouldOptimizeForNetworkUse = false
         let videoSettings: [String: Any] = [
-            AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: project.resolution.width, AVVideoHeightKey: project.resolution.height,
+            AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: project.outputSize.width, AVVideoHeightKey: project.outputSize.height,
             AVVideoColorPropertiesKey: [AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
                 AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2, AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2],
-            AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: project.resolution.bitrate,
+            AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: project.outputSize.bitrate,
                 AVVideoExpectedSourceFrameRateKey: project.outputFrameRate.value, AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
                 AVVideoMaxKeyFrameIntervalDurationKey: 2, AVVideoAllowFrameReorderingKey: false]
         ]

@@ -42,7 +42,7 @@ final class ChunkIdentityTests: XCTestCase {
         XCTAssertNotEqual(baseline, try identity(edited, index: 1))
         edited = original; edited.clips[0].start = Clock.ticks(1)
         XCTAssertNotEqual(baseline, try identity(edited, index: 1))
-        edited = original; edited.resolution = .quadHD
+        edited = original; edited.matchesSourceResolution = false; edited.resolution = .quadHD
         XCTAssertNotEqual(baseline, try identity(edited, index: 1))
         edited = original; edited.matchesSourceFrameRate = false; edited.frameRate = .ntsc30
         XCTAssertNotEqual(baseline, try identity(edited, index: 1))

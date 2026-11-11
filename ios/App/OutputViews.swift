@@ -21,7 +21,15 @@ struct ExportView: View {
     var body: some View {
         Form {
             Section("画質") {
-                Picker("解像度", selection: $store.project.resolution) { ForEach(Resolution.allCases) { Text($0.rawValue).tag($0) } }
+                Picker("解像度", selection: Binding(get: {
+                    store.project.matchesSourceResolution == true ? "auto" : store.project.resolution.rawValue
+                }, set: { value in
+                    store.project.matchesSourceResolution = value == "auto"
+                    if let resolution = Resolution(rawValue: value) { store.project.resolution = resolution }
+                })) {
+                    Text("先頭の動画に合わせる（\(store.project.outputSize.width)×\(store.project.outputSize.height)）").tag("auto")
+                    ForEach(Resolution.allCases) { Text($0.rawValue).tag($0.rawValue) }
+                }.accessibilityIdentifier("outputResolution")
                 Picker("フレームレート", selection: Binding(get: {
                     store.project.matchesSourceFrameRate == true ? "auto" : store.project.frameRate.rawValue
                 }, set: { value in
@@ -41,7 +49,7 @@ struct ExportView: View {
                 if destination != nil { Button("アプリ内に戻す") { destination = nil; destinationBookmark = nil; store.project.destinationBookmark = nil } }
             }.disabled(store.exporting || store.busy)
             if let timeline = store.timeline {
-                let capacity = CapacityEstimate(duration: timeline.duration, resolution: store.project.resolution, separateDestination: destination != nil)
+                let capacity = CapacityEstimate(duration: timeline.duration, bitrate: store.project.outputSize.bitrate, separateDestination: destination != nil)
                 Section("確認") {
                     Button("仕上がりを確認", systemImage: "play.rectangle") { preview = true }
                         .disabled(store.exporting || store.busy || store.project.clips.isEmpty)

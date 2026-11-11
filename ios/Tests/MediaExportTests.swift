@@ -65,7 +65,7 @@ final class MediaExportTests: XCTestCase {
         let red = media.appendingPathComponent("red.mp4"), blue = media.appendingPathComponent("blue.mp4")
         try await fixture(url: red, frames: 36, red: true)
         try await fixture(url: blue, frames: 36, red: false)
-        var project = Project(); project.resolution = .quadHD
+        var project = Project(); project.matchesSourceResolution = false; project.resolution = .quadHD
         let a = try await MediaFiles.probe(red, relativePath: "Media/red.mp4", bookmark: nil)
         let b = try await MediaFiles.probe(blue, relativePath: "Media/blue.mp4", bookmark: nil)
         project.clips = [Clip(source: a, bandName: "冒頭のバンド"), Clip(source: b, bandName: "次のバンド")]
@@ -181,6 +181,30 @@ final class MediaExportTests: XCTestCase {
         state.status = "completed"; try JSONEncoder().encode(state).write(to: report)
         XCTAssertFalse(ExportHistory.attempt(jobsRoot: root, project: project, completed: completed).unfinished)
     }
+    func testAutomaticOutputMatchesImportedDimensionsAndRate() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let media = root.appendingPathComponent("Media")
+        try FileManager.default.createDirectory(at: media, withIntermediateDirectories: true)
+        let source = media.appendingPathComponent("source.mp4")
+        try await fixture(url: source, frames: 36, red: true)
+        var project = Project(); project.name = "自動出力"
+        let info = try await MediaFiles.probe(source, relativePath: "Media/source.mp4", bookmark: nil)
+        project.clips = [Clip(source: info, bandName: "Band")]
+        let reopened = try JSONDecoder().decode(Project.self, from: JSONEncoder().encode(project))
+        let files = try await ExportEngine.run(project: reopened, directory: root,
+            jobsRoot: root.appendingPathComponent("jobs"), destination: nil, control: ExportControl()) { _, _ in }
+        let movie = try XCTUnwrap(files.first { $0.pathExtension == "mp4" })
+        let asset = AVURLAsset(url: movie)
+        let tracks = try await asset.loadTracks(withMediaType: .video)
+        let track = try XCTUnwrap(tracks.first)
+        let size = try await track.load(.naturalSize)
+        let fps = try await track.load(.nominalFrameRate)
+        XCTAssertEqual(Int(size.width), info.width); XCTAssertEqual(Int(size.height), info.height)
+        XCTAssertEqual(Double(fps), info.nominalFPS, accuracy: 0.001)
+        let duration = try await asset.load(.duration)
+        XCTAssertEqual(duration.seconds, Clock.seconds(info.duration), accuracy: 1 / info.nominalFPS)
+    }
     func testOutputFormatsPreserveFrameCountAndRate() async throws {
         executionTimeAllowance = 600
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -193,7 +217,7 @@ final class MediaExportTests: XCTestCase {
         XCTAssertEqual(metadata.nominalFPS, 60, accuracy: 0.02)
         for resolution in Resolution.allCases { for rate in FrameRate.allCases {
             var project = Project(); project.name = "Format \(resolution.rawValue) \(rate.rawValue)"
-            project.resolution = resolution; project.matchesSourceFrameRate = false; project.frameRate = rate
+            project.matchesSourceResolution = false; project.resolution = resolution; project.matchesSourceFrameRate = false; project.frameRate = rate
             project.clips = [Clip(source: metadata, bandName: "形式の試験")]
             if rate == .fps60 { project.matchesSourceFrameRate = true }
             XCTAssertEqual(project.outputFrameRate, rate)
@@ -339,7 +363,7 @@ final class MediaExportTests: XCTestCase {
         let key = try ExportEngine.key(p)
         p.modifiedAt = Date().addingTimeInterval(100); p.name = "別のファイル名"
         XCTAssertEqual(try ExportEngine.key(p), key)
-        p.resolution = .quadHD
+        p.matchesSourceResolution = false; p.resolution = .quadHD
         XCTAssertNotEqual(try ExportEngine.key(p), key)
     }
     func testRotationMatchesAVFoundationReference() async throws {

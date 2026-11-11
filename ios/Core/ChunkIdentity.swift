@@ -15,14 +15,14 @@ struct ChunkIdentity: Encodable {
     }
     var rendererVersion: Int
     var range: ExportChunk
-    var resolution: Resolution
+    var outputSize: OutputSize
     var frameRate: FrameRate
     var audioBitRate: Int
     var layers: [Layer]
 
     init(project: Project, timeline: Timeline, chunk: ExportChunk, rendererVersion: Int, audioBitRate: Int) {
         self.rendererVersion = rendererVersion; range = chunk
-        resolution = project.resolution; frameRate = project.outputFrameRate; self.audioBitRate = audioBitRate
+        outputSize = project.outputSize; frameRate = project.outputFrameRate; self.audioBitRate = audioBitRate
         var bandName = "", bandStart: Int64 = 0
         var result: [Layer] = []
         for segment in timeline.segments {
