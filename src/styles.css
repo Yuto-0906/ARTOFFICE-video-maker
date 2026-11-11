@@ -267,4 +267,18 @@ input { width: 100%; border: 1px solid var(--border); border-radius: 9px; paddin
 
 .preview-status { position: absolute; inset: 0; display: grid; place-items: center; background: #090a0c; color: #e8edf5; font-size: 13px; }
 
-.playhead-range { width: 100%; margin: 0 0 16px; accent-color: var(--accent); }
+
+.video-stage:fullscreen { width: 100vw; height: 100vh; aspect-ratio: auto; border-radius: 0; }
+.preview-controls { position: absolute; inset: auto 0 0; z-index: 2; padding: 30px 20px 18px; color: #fff; background: linear-gradient(transparent, #000b); transition: opacity .15s; }
+.preview-controls-hidden { opacity: 0; pointer-events: none; }
+.preview-controls:focus-within { opacity: 1; pointer-events: auto; }
+.preview-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.preview-controls button { display: grid; place-items: center; width: 34px; height: 34px; padding: 5px; border: 0; background: transparent; color: #fff; border-radius: 5px; }
+.preview-controls button:hover { background: #ffffff26; }
+.preview-controls button:focus-visible { outline: 2px solid #fff; }
+.preview-controls svg { width: 22px; height: 22px; fill: currentColor; }
+.preview-clock { font-size: 14px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.preview-volume { display: flex; align-items: center; gap: 7px; margin-left: auto; }
+.preview-volume input { width: 75px; height: 5px; padding: 0; accent-color: #fff; }
+.preview-seek { display: block; width: 100%; height: 5px; padding: 0; margin: 0; border: 0; border-radius: 5px; appearance: none; cursor: pointer; }
+.preview-seek::-webkit-slider-thumb { appearance: none; width: 14px; height: 14px; border: 0; border-radius: 50%; background: #fff; }

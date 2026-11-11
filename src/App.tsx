@@ -937,11 +937,15 @@ interface PreviewVideoProps {
   playerRef: RefObject<PreviewHandle | null>;
   startSeconds: number;
   stopSeconds: number;
+  durationSeconds: number;
+  currentTime: number;
+  frameSeconds: number;
+  onSeek: (seconds: number) => void;
   onTimeUpdate: (seconds: number) => void;
   onError: (message: string) => void;
 }
 
-function PreviewVideo({ sourcePath, preferPreview, playerRef, startSeconds, stopSeconds, onTimeUpdate, onError }: PreviewVideoProps) {
+function PreviewVideo({ sourcePath, preferPreview, playerRef, startSeconds, stopSeconds, durationSeconds, currentTime, frameSeconds, onSeek, onTimeUpdate, onError }: PreviewVideoProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const clientId = useRef(crypto.randomUUID());
   const generation = useRef(0);
@@ -952,11 +956,53 @@ function PreviewVideo({ sourcePath, preferPreview, playerRef, startSeconds, stop
   const [windowStart, setWindowStart] = useState(Math.floor(startSeconds / 30) * 30);
   const [preview, setPreview] = useState<PreparedPreview | null>(null);
   const [failed, setFailed] = useState(false);
+  const [playing, setPlaying] = useState(false);
+  const [muted, setMuted] = useState(false);
+  const [volume, setVolume] = useState(1);
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const controlsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scrubbing = useRef(false);
+  const [scrubTime, setScrubTime] = useState<number | null>(null);
+
+  function finishScrub(input: HTMLInputElement) {
+    if (!scrubbing.current) return;
+    scrubbing.current = false;
+    setScrubTime(null);
+    onSeek(Number(input.value));
+  }
+
+  function showControls() {
+    setControlsVisible(true);
+    if (controlsTimer.current) clearTimeout(controlsTimer.current);
+    if (playing) controlsTimer.current = setTimeout(() => setControlsVisible(false), 2200);
+  }
+  useEffect(() => {
+    showControls();
+    return () => { if (controlsTimer.current) clearTimeout(controlsTimer.current); };
+  }, [playing]);
+
+  function togglePlayback() {
+    const video = videoRef.current;
+    if (!video) return;
+    showControls();
+    if (!video.paused || resume.current) {
+      resume.current = false; video.pause(); setPlaying(false);
+    } else {
+      if (currentTime >= stopSeconds || currentTime < startSeconds) {
+        resume.current = true; setPlaying(true); onSeek(startSeconds);
+      } else if (!video.readyState || seekTarget.current !== null) {
+        resume.current = true; setPlaying(true);
+      } else { void video.play().catch((reason) => onError(errorMessage(reason))); }
+    }
+  }
 
   function seek(seconds: number) {
     pending.current = seconds;
     seekTarget.current = seconds;
     const video = videoRef.current;
+    if (seconds < startSeconds || seconds >= stopSeconds) {
+      resume.current = false; video?.pause(); setPlaying(false);
+    }
     if (!needsPreview || (preview && seconds >= preview.startSeconds && seconds < preview.endSeconds)) {
       if (video?.readyState) video.currentTime = Math.max(0, seconds - (needsPreview ? preview!.startSeconds : 0));
     } else {
@@ -996,7 +1042,11 @@ function PreviewVideo({ sourcePath, preferPreview, playerRef, startSeconds, stop
   return <>
     <video ref={videoRef}
       src={needsPreview ? (preview ? convertFileSrc(preview.path) : undefined) : convertFileSrc(sourcePath)}
-      controls preload="metadata"
+      preload="metadata"
+      onClick={togglePlayback}
+      onPointerMove={showControls}
+      onPlay={() => setPlaying(true)}
+      onPause={() => { if (!resume.current) setPlaying(false); }}
       onLoadedMetadata={() => {
         if (needsPreview && !preview) return;
         const video = videoRef.current!;
@@ -1012,18 +1062,22 @@ function PreviewVideo({ sourcePath, preferPreview, playerRef, startSeconds, stop
         finishSeek();
         if (seekTarget.current !== null || video.seeking || video.readyState < 2) return;
         const time = video.currentTime + (needsPreview ? preview?.startSeconds ?? 0 : 0);
-        onTimeUpdate(Math.min(stopSeconds, time));
-        if (time >= stopSeconds) {
+        if (!video.paused && time >= stopSeconds) {
           video.pause();
-          if (time > stopSeconds + 0.02) video.currentTime = Math.max(0, stopSeconds - (needsPreview ? preview?.startSeconds ?? 0 : 0));
+          video.currentTime = Math.max(0, stopSeconds - (needsPreview ? preview?.startSeconds ?? 0 : 0));
+          pending.current = stopSeconds;
+          onTimeUpdate(stopSeconds);
+        } else {
+          pending.current = time;
+          onTimeUpdate(time);
         }
-        pending.current = Math.min(stopSeconds, time);
       }}
       onEnded={() => {
         if (needsPreview && preview && preview.endSeconds < stopSeconds - 0.01) {
           pending.current = preview.endSeconds;
           seekTarget.current = preview.endSeconds;
           resume.current = true;
+          setPlaying(true);
           setWindowStart(preview.endSeconds);
           setPreview(null);
         }
@@ -1034,6 +1088,36 @@ function PreviewVideo({ sourcePath, preferPreview, playerRef, startSeconds, stop
       }}
     />
     {needsPreview && !preview && <div className="preview-status" role="status">{failed ? "プレビューを準備できませんでした。" : "プレビューを準備中…"}</div>}
+    <div className={`preview-controls${playing && !controlsVisible && (!needsPreview || preview) ? " preview-controls-hidden" : ""}`} onPointerMove={showControls} onFocusCapture={showControls}>
+      <div className="preview-toolbar">
+        <button type="button" onClick={togglePlayback} aria-label={playing ? "一時停止" : "再生"} title={playing ? "一時停止" : "再生"}>
+          <svg viewBox="0 0 24 24" aria-hidden="true">{playing ? <path d="M6 4h4v16H6zm8 0h4v16h-4z" /> : <path d="M7 3v18l15-9z" />}</svg>
+        </button>
+        <span className="preview-clock" role="timer" aria-label="元動画の再生時刻">{formatChapterTime(scrubTime ?? currentTime)} / {formatChapterTime(durationSeconds)}</span>
+        <div className="preview-volume">
+          <button type="button" aria-label={muted ? "ミュートを解除" : "ミュート"} title={muted ? "ミュートを解除" : "ミュート"} onClick={() => { const video = videoRef.current; if (video) { video.muted = !video.muted; setMuted(video.muted); } }}>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9h4l5-4v14l-5-4H3z" />{muted ? <path d="m16 8 6 8m0-8-6 8" fill="none" stroke="currentColor" strokeWidth="2" /> : <path d="M16 7q7 5 0 10M15 10q3 2 0 4" fill="none" stroke="currentColor" strokeWidth="2" />}</svg>
+          </button>
+          <input type="range" aria-label="プレビュー音量" min={0} max={1} step={0.01} value={muted ? 0 : volume} onChange={(event) => { const value = Number(event.target.value); const video = videoRef.current; if (video) { video.volume = value; video.muted = false; } setVolume(value); setMuted(false); }} />
+        </div>
+        <button type="button" aria-label="全画面表示を切り替え" title="全画面表示" onClick={() => { if (document.fullscreenElement) void document.exitFullscreen(); else void videoRef.current?.closest(".video-stage")?.requestFullscreen(); }}>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9V3h6m6 0h6v6M3 15v6h6m6 0h6v-6" fill="none" stroke="currentColor" strokeWidth="2" /></svg>
+        </button>
+      </div>
+      <input type="range" className="preview-seek" min={0} max={durationSeconds} step={frameSeconds} value={Math.min(durationSeconds, Math.max(0, scrubTime ?? currentTime))} style={{ background: `linear-gradient(to right, #ff6268 ${100 * (scrubTime ?? currentTime) / Math.max(1, durationSeconds)}%, #ffffff66 0)` }}
+        onPointerDown={() => {
+          scrubbing.current = true;
+          const video = videoRef.current;
+          resume.current = resume.current || Boolean(video && !video.paused);
+          video?.pause();
+        }}
+        onChange={(event) => { const time = Number(event.target.value); if (scrubbing.current) setScrubTime(time); else onSeek(time); }}
+        onPointerUp={(event) => finishScrub(event.currentTarget)}
+        onPointerCancel={(event) => finishScrub(event.currentTarget)}
+        onLostPointerCapture={(event) => finishScrub(event.currentTarget)}
+        onBlur={(event) => finishScrub(event.currentTarget)}
+        aria-label="元動画の再生位置" />
+    </div>
   </>;
 }
 
@@ -1067,7 +1151,7 @@ function TrimStep({ clips, selected, onSelect, onUpdate, onNext, onError }: Trim
   }, [selected.id, inSeconds]);
 
   function seek(seconds: number) {
-    const clamped = Math.min(outSeconds, Math.max(inSeconds, seconds));
+    const clamped = Math.min(frameToSeconds(Math.max(0, selected.media.frameCount - 1), fps), Math.max(0, seconds));
     playerRef.current?.seek(clamped);
     setCurrentTime(clamped);
   }
@@ -1112,13 +1196,16 @@ function TrimStep({ clips, selected, onSelect, onUpdate, onNext, onError }: Trim
             onError={onError}
             startSeconds={inSeconds}
             stopSeconds={outSeconds}
+            durationSeconds={selected.media.durationSeconds}
+            currentTime={currentTime}
+            frameSeconds={fps.denominator / fps.numerator}
+            onSeek={seek}
             onTimeUpdate={setCurrentTime}
           />
           <div className="band-title-preview" style={{ opacity: Math.max(0, Math.min(1, titleOpacity)) }}>{selected.bandName}</div>
         </div>
 
         <div className="timeline-card">
-          <input type="range" className="playhead-range" min={inSeconds} max={outSeconds} step={fps.denominator / fps.numerator} value={Math.min(outSeconds, Math.max(inSeconds, currentTime))} onChange={(event) => seek(Number(event.target.value))} aria-label="再生位置" />
           <div className="timeline-labels"><span>開始 {formatClock(inSeconds)}</span><strong>{formatClock(currentTime)}</strong><span>終了 {formatClock(outSeconds)}</span></div>
           <div className="dual-range">
             <div className="range-fill" style={{ left: `${(selected.inFrame / selected.media.frameCount) * 100}%`, right: `${100 - (selected.outFrameExclusive / selected.media.frameCount) * 100}%` }} />
