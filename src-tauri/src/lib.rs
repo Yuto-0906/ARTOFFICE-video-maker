@@ -95,6 +95,34 @@ async fn cancel_render(state: State<'_, RenderState>, job_id: String) -> Result<
     Ok(state.cancel(&job_id).await)
 }
 
+/// 完成ファイルをエクスプローラー／Finderで選択した状態で表示する。
+#[tauri::command]
+fn reveal_in_folder(path: String) -> Result<(), String> {
+    let target = std::path::Path::new(&path);
+    if !target.exists() {
+        return Err("ファイルが見つかりません。移動または削除された可能性があります。".to_string());
+    }
+    #[cfg(target_os = "windows")]
+    let result = {
+        use std::os::windows::process::CommandExt;
+        std::process::Command::new("explorer.exe")
+            .raw_arg(format!("/select,\"{}\"", path))
+            .spawn()
+    };
+    #[cfg(target_os = "macos")]
+    let result = std::process::Command::new("open")
+        .arg("-R")
+        .arg(&path)
+        .spawn();
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let result = std::process::Command::new("xdg-open")
+        .arg(target.parent().unwrap_or(target))
+        .spawn();
+    result
+        .map(|_| ())
+        .map_err(|error| format!("フォルダーを開けませんでした。{error}"))
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -123,6 +151,7 @@ pub fn run() {
             output_paths,
             start_render,
             cancel_render,
+            reveal_in_folder,
         ])
         .run(tauri::generate_context!())
         .expect("ARTOFFICE広報動画作成ソフトを起動できませんでした");

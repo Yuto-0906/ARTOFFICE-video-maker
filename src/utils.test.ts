@@ -15,6 +15,10 @@ import {
   moveClipGroup,
   parseClock,
   parseVideoFileName,
+  guessOrderAndBandName,
+  isBlockingImportError,
+  parentDirectory,
+  rulerStep,
   projectDurationSeconds,
   renumberClipOrders,
   secondsToFrame,
@@ -141,8 +145,8 @@ describe("chapter calculation", () => {
 
   it("YouTubeの章数と最短時間の条件を警告する", () => {
     expect(chapterWarnings([clip("A", 8), clip("B", 12)])).toEqual([
-      "YouTubeのチャプター表示には3件以上の時刻が必要です。",
-      "Aは10秒未満のため，YouTubeでチャプターとして認識されない可能性があります。",
+      "YouTubeのチャプターは3つ以上ないと表示されません。",
+      "A：10秒未満のため，YouTubeではチャプターになりません。",
     ]);
   });
 
@@ -159,7 +163,7 @@ describe("chapter calculation", () => {
       { seconds: 17, text: "次のバンド" },
     ]);
     expect(projectDurationSeconds(clips)).toBeCloseTo(37.5, 1);
-    expect(chapterWarnings(clips)).toEqual(["YouTubeのチャプター表示には3件以上の時刻が必要です。"]);
+    expect(chapterWarnings(clips)).toEqual(["YouTubeのチャプターは3つ以上ないと表示されません。"]);
   });
 });
 
@@ -223,5 +227,36 @@ describe("source output settings", () => {
   it("自動解像度の見積もりを先頭素材の画素数に合わせる", () => {
     expect(estimateOutputBytes(60, "source", { width: 3840, height: 2160 })).toBe((60_000_000 + 384_000) * 60 / 8);
     expect(estimateOutputBytes(60, "1080p")).toBe((15_000_000 + 384_000) * 60 / 8);
+  });
+});
+
+describe("guessOrderAndBandName", () => {
+  it("アンダースコア以外の区切りも出演順として読む", () => {
+    expect(guessOrderAndBandName("01 MOSHIMO.mp4")).toEqual({ order: 1, bandName: "MOSHIMO" });
+    expect(guessOrderAndBandName("3-東京事変.MOV")).toEqual({ order: 3, bandName: "東京事変" });
+    expect(guessOrderAndBandName("2_Mrs. GREEN APPLE.MP4")).toEqual({ order: 2, bandName: "Mrs. GREEN APPLE" });
+  });
+
+  it("番号が無ければファイル名をバンド名にする", () => {
+    expect(guessOrderAndBandName("MOSHIMO.mp4")).toEqual({ order: null, bandName: "MOSHIMO" });
+    expect(guessOrderAndBandName("0_MOSHIMO.mp4")).toEqual({ order: null, bandName: "0_MOSHIMO" });
+  });
+});
+
+describe("表示用の補助関数", () => {
+  it("親フォルダーのパスを返す", () => {
+    expect(parentDirectory(String.raw`C:\ライブ\1_A.mp4`)).toBe(String.raw`C:\ライブ`);
+    expect(parentDirectory("/Users/a/live/1_A.mp4")).toBe("/Users/a/live");
+  });
+
+  it("目盛りの間隔を長さに合わせて選ぶ", () => {
+    expect(rulerStep(40)).toBe(5);
+    expect(rulerStep(30 * 60)).toBe(300);
+  });
+
+  it("旧版のファイル名の注意は書き出しを止めない", () => {
+    expect(isBlockingImportError({ importError: "ファイル名を「出演順_バンド名.拡張子」にしてください。" })).toBe(false);
+    expect(isBlockingImportError({ importError: "元動画が見つかりません。" })).toBe(true);
+    expect(isBlockingImportError({})).toBe(false);
   });
 });

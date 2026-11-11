@@ -43,6 +43,20 @@ export function parseVideoFileName(fileName: string): ParsedFileName | null {
   return { order, bandName };
 }
 
+/**
+ * 「01 バンド名」「1-バンド名」など，アンダースコア以外の区切りも受け付ける。
+ * 番号が無い場合はファイル名をそのままバンド名にする。
+ */
+export function guessOrderAndBandName(fileName: string): { order: number | null; bandName: string } {
+  const strict = parseVideoFileName(fileName);
+  if (strict) return strict;
+  const stem = fileName.replace(/\.[^.]+$/, "").trim();
+  const match = stem.match(/^(\d{1,4})[\s_\-.．、・]+(.+)$/);
+  const order = match ? Number(match[1]) : NaN;
+  if (match && order >= 1 && match[2].trim()) return { order, bandName: match[2].trim() };
+  return { order: null, bandName: stem };
+}
+
 export function sortClipsByOrder<T extends Pick<ClipV1, "order" | "bandName">>(clips: T[]): T[] {
   return [...clips].sort((a, b) => a.order - b.order || a.bandName.localeCompare(b.bandName, "ja"));
 }
@@ -172,11 +186,11 @@ export function formatBytes(bytes: number): string {
 export function chapterWarnings(clips: ClipV1[]): string[] {
   const warnings: string[] = [];
   const groups = clipGroups(clips);
-  if (groups.length > 0 && groups.length < 3) warnings.push("YouTubeのチャプター表示には3件以上の時刻が必要です。");
+  if (groups.length > 0 && groups.length < 3) warnings.push("YouTubeのチャプターは3つ以上ないと表示されません。");
   groups.forEach((group) => {
     const duration = group.reduce((sum, clip) => sum + clipDurationSeconds(clip), 0);
     if (duration < 10) {
-      warnings.push(`${group[0].bandName}は10秒未満のため，YouTubeでチャプターとして認識されない可能性があります。`);
+      warnings.push(`${group[0].bandName}：10秒未満のため，YouTubeではチャプターになりません。`);
     }
   });
   return warnings;
@@ -192,12 +206,29 @@ export function validateProject(value: unknown): value is ProjectV1 {
     Array.isArray(project.clips) &&
     (project.outputResolution === "source" || project.outputResolution === "1080p" || project.outputResolution === "1440p") &&
     (project.outputFrameRate === undefined || ["source", "23.976", "24", "25", "29.97", "30", "50", "59.94", "60"].includes(project.outputFrameRate)) &&
+    (project.outputDirectory === undefined || typeof project.outputDirectory === "string") &&
     project.transitionMs === 500
   );
 }
 
 export function basename(path: string): string {
   return path.replace(/\\/g, "/").split("/").pop() ?? path;
+}
+
+export function parentDirectory(path: string): string {
+  const index = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  return index > 0 ? path.slice(0, index) : "";
+}
+
+/** 時間軸の目盛り間隔（秒）。幅に対しておおよそ maxTicks 本以内に収める。 */
+export function rulerStep(durationSeconds: number, maxTicks = 8): number {
+  const steps = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
+  return steps.find((step) => durationSeconds / step <= maxTicks) ?? 7200;
+}
+
+/** 書き出しを止める読込エラーか。旧版で付けたファイル名の注意は対象外。 */
+export function isBlockingImportError(clip: Pick<ClipV1, "importError">): boolean {
+  return Boolean(clip.importError) && !clip.importError!.startsWith("ファイル名");
 }
 
 export function parentFolderName(path: string): string {

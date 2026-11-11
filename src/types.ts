@@ -69,6 +69,8 @@ export interface ProjectV1 {
   outputFrameRate?: FrameRate;
   transitionMs: 500;
   thumbnail: ThumbnailV1 | null;
+  /** 完成動画の保存先。0.4.0以前のプロジェクトには無い。 */
+  outputDirectory?: string;
 }
 
 export interface ParsedFileName {

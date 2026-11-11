@@ -1953,6 +1953,7 @@ mod tests {
             output_frame_rate: crate::models::FrameRate::default(),
             transition_ms: 500,
             thumbnail: None,
+            output_directory: None,
         };
         let project_path = output_directory.join(format!("{event_name}.aovproj"));
         project::write(project_path.to_str().unwrap(), &project_model).unwrap();

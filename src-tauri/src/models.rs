@@ -127,6 +127,9 @@ pub struct ProjectV1 {
     pub output_frame_rate: FrameRate,
     pub transition_ms: u32,
     pub thumbnail: Option<ThumbnailV1>,
+    /// 完成動画の保存先。0.4.0以前のプロジェクトには無い。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_directory: Option<String>,
 }
 
 impl ProjectV1 {

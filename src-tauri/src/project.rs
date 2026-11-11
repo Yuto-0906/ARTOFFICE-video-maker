@@ -43,6 +43,7 @@ mod tests {
             output_frame_rate: crate::models::FrameRate::default(),
             transition_ms: 500,
             thumbnail: None,
+            output_directory: None,
         };
         write(path.to_str().unwrap(), &project).unwrap();
         let loaded = read(path.to_str().unwrap()).unwrap();
