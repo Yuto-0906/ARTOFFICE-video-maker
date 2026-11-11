@@ -13,7 +13,9 @@ private struct MediaDocumentPicker: UIViewControllerRepresentable {
     let cancelled: () -> Void
     func makeCoordinator() -> Coordinator { Coordinator(selected: selected, cancelled: cancelled) }
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        let types: [UTType] = [.movie] + MediaFormats.videoExtensions.compactMap { UTType(filenameExtension: $0) }
+        // File providers may publish supported movies (notably MKV) as generic
+        // data. Validate the extension after selection instead of hiding them.
+        let types: [UTType] = [.data]
         let picker = UIDocumentPickerViewController(forOpeningContentTypes: request.folder ? [.folder] : types, asCopy: false)
         picker.allowsMultipleSelection = request.multiple; picker.shouldShowFileExtensions = true
         picker.delegate = context.coordinator
@@ -65,6 +67,7 @@ struct ImportView: View {
                 }
                 Toggle("端末にコピー", isOn: $copy)
             } header: { Text("動画を追加") } footer: {
+                Text("Drive・Boxの動画は「動画を選択」から追加。")
                 if !copy { Text("参照元への接続が必要です。写真ライブラリの動画や変換が必要な動画は端末に保存します。") }
             }
             Section {
@@ -95,7 +98,13 @@ struct ImportView: View {
                 request = nil
                 Task {
                     if selectedRequest.folder, let folder = urls.first { await store.importFolder(folder, copy: copy) }
-                    else { await store.importVideos(urls, copy: copy, relink: relink) }
+                    else {
+                        guard urls.allSatisfy({ MediaFormats.isVideo($0) || UTType(filenameExtension: $0.pathExtension)?.conforms(to: .movie) == true }) else {
+                            store.message = "動画ファイルを選択してください。"
+                            return
+                        }
+                        await store.importVideos(urls, copy: copy, relink: relink)
+                    }
                 }
             }, cancelled: { request = nil })
         }
