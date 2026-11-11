@@ -1,6 +1,7 @@
 import AVFoundation
 import Foundation
 import ffmpegkit
+import NativeFFmpeg
 
 /// Convert only sources that AVFoundation cannot play. Imported originals stay intact.
 enum MediaConversion {
@@ -42,27 +43,11 @@ enum MediaConversion {
     }
 
     static func normalize(_ source: URL, output: URL, storage: URL, minimumDuration: Int64) async throws {
-        // This FFmpegKit bridge captures av_log, not FFprobe's JSON stdout.
-        // Write machine-readable metadata separately so decoder messages cannot mix with it.
-        let metadataURL = output.deletingLastPathComponent().appendingPathComponent("metadata-\(UUID().uuidString).json")
-        defer { try? FileManager.default.removeItem(at: metadataURL) }
-        let session = FFprobeKit.executeWithArguments(["-v", "error", "-hide_banner", "-protocol_whitelist", "file,pipe",
-            "-show_format", "-show_streams", "-of", "json", "-o", metadataURL.path, source.path])
-        guard ReturnCode.isSuccess(session.getReturnCode()),
-              let json = try? String(contentsOf: metadataURL, encoding: .utf8),
-              let information = MediaInformationJsonParser.from(json),
-              let video = information.getStreams().first(where: { $0.getType() == "video" }),
-              let duration = information.getDuration().flatMap(Double.init), duration.isFinite, duration > 0,
-              let width = video.getWidth()?.intValue, let height = video.getHeight()?.intValue,
-              width > 0, height > 0 else {
-            #if DEBUG
-            print("ARTOFFICE metadata diagnostic: \(session.getOutput())")
-            #endif
-            throw AppError.message("動画の映像または長さを取得できませんでした。")
-        }
+        let information = try probe(source)
+        let duration = information.duration, width = information.width, height = information.height
         guard duration >= Clock.seconds(minimumDuration) else { throw AppError.message("元のカット範囲より短い動画です。対応する素材を選んでください。") }
-        let codec = video.getCodec() ?? ""
-        let pixelFormat = video.getFormat() ?? ""
+        let codec = information.codec
+        let pixelFormat = information.pixelFormat
         let copyVideo = (codec == "h264" && pixelFormat == "yuv420p") || (codec == "hevc" && ["yuv420p", "yuv420p10le"].contains(pixelFormat))
         let bitrate = min(60_000_000.0, max(4_000_000.0, Double(width) * Double(height) * 6))
         let sourceBytes = Double((try source.resourceValues(forKeys: [.fileSizeKey])).fileSize ?? 0)
@@ -89,6 +74,45 @@ enum MediaConversion {
         } catch is CancellationError { throw CancellationError() } catch { /* Simulator/older hardware may lack an H.264 encoder. */ }
         try await run(input + filter + ["-c:v", "mpeg4", "-q:v", "2"] + outputOptions)
         guard try await isPlayable(output) else { throw AppError.message("変換後の動画を再生できませんでした。") }
+    }
+
+    private struct Information {
+        let duration: Double
+        let width: Int
+        let height: Int
+        let codec: String
+        let pixelFormat: String
+    }
+
+    /// Each source owns its format context. FFprobe's CLI keeps process-global
+    /// output state in this dependency and cannot safely be called repeatedly.
+    private static func probe(_ source: URL) throws -> Information {
+        var context: UnsafeMutablePointer<AVFormatContext>?
+        defer { avformat_close_input(&context) }
+        let opened = avformat_open_input(&context, source.path, nil, nil)
+        guard opened >= 0, let format = context else {
+            throw AppError.message("動画を開けませんでした。")
+        }
+        guard avformat_find_stream_info(format, nil) >= 0, let streams = format.pointee.streams else {
+            throw AppError.message("動画の情報を取得できませんでした。")
+        }
+        for index in 0..<Int(format.pointee.nb_streams) {
+            guard let stream = streams[index], let pointer = stream.pointee.codecpar,
+                  pointer.pointee.codec_type == AVMEDIA_TYPE_VIDEO else { continue }
+            let parameters = pointer.pointee
+            var duration = Double(format.pointee.duration) / 1_000_000
+            if !duration.isFinite || duration <= 0 {
+                let base = stream.pointee.time_base
+                duration = Double(stream.pointee.duration) * Double(base.num) / Double(base.den)
+            }
+            guard duration.isFinite, duration > 0, parameters.width > 0, parameters.height > 0 else {
+                throw AppError.message("動画の映像または長さを取得できませんでした。")
+            }
+            let codec = avcodec_get_name(parameters.codec_id).map { String(cString: $0) } ?? ""
+            let pixelFormat = av_get_pix_fmt_name(AVPixelFormat(rawValue: parameters.format)).map { String(cString: $0) } ?? ""
+            return Information(duration: duration, width: Int(parameters.width), height: Int(parameters.height), codec: codec, pixelFormat: pixelFormat)
+        }
+        throw AppError.message("映像のある動画を選択してください。")
     }
 
     static func isPlayable(_ url: URL) async throws -> Bool {

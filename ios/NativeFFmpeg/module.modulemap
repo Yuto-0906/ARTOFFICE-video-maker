@@ -1,0 +1,4 @@
+module NativeFFmpeg {
+    header "NativeFFmpeg.h"
+    export *
+}

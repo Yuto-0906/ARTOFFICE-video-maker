@@ -41,3 +41,5 @@ Mac版のFFmpeg・ffprobeは公式のFFmpeg 8.1.2からビルドします。libx
 ## iOS版のFFmpegKit
 
 iOS版では，Apple標準機能で再生できない動画の取り込みと，標準機能で読めない画像のデコードにFFmpegKitを使用する。Swift Packageの参照先を固定しており，公開ソースは`https://github.com/jaywcjlove/ffmpeg-kit/tree/0bd85df8f9693061f6f979414662baaf876a3e20`にある。対応するライセンスは`ios/Resources/FFmpegKit-LICENSE.txt`に同梱する。FFmpeg本体とラッパーの再ビルド手順は同リポジトリのREADMEとappleスクリプトに従う。
+
+この固定リビジョンのiOS用バイナリには，公開C関数の参照先がSwiftのCoreMediaオーバーレイになっているものがある。2026年11月11日の変更として，ビルド成果物の該当参照をCoreMedia.frameworkへ補正し，再署名する。変更手順は`scripts/ios/fix-coremedia-linkage.sh`に含めている。依存パッケージのソース自体は変更しない。

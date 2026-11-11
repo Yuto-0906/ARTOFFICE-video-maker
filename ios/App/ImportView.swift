@@ -65,7 +65,7 @@ struct ImportView: View {
                 }
                 Toggle("端末にコピー", isOn: $copy)
             } header: { Text("動画を追加") } footer: {
-                if !copy { Text("参照元への接続が必要です。写真ライブラリの動画はコピーします。") }
+                if !copy { Text("参照元への接続が必要です。写真ライブラリの動画や変換が必要な動画は端末に保存します。") }
             }
             Section {
                 if store.project.clips.isEmpty {

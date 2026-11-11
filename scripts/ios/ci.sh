@@ -114,6 +114,10 @@ PY
     fi
     xcrun simctl shutdown "$DEVICE_ID" || true
     echo "$FAMILY test exit status: $TEST_RESULT"
+    if [[ "$TEST_RESULT" != 0 && "${2:-all}" == formats ]]; then
+      # These decoder paths are shared. Fix a failure before booting another device.
+      break
+    fi
   done
   if [[ "$OVERALL_RESULT" != 0 ]]; then exit 1; fi
 elif [[ "${1:-}" == device ]]; then
